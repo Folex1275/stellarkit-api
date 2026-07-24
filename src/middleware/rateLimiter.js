@@ -1,6 +1,6 @@
 const rateLimit = require("express-rate-limit");
 
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const GLOBAL_RATE_LIMIT_MAX = 100;
 const ACCOUNT_SUMMARY_RATE_LIMIT_MAX = 20;
 const ASSET_HOLDERS_RATE_LIMIT_MAX = 10;
@@ -9,6 +9,11 @@ function parsePositiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
+
+const RATE_LIMIT_WINDOW_MS = parsePositiveInteger(
+  process.env.RATE_LIMIT_WINDOW_MS,
+  DEFAULT_RATE_LIMIT_WINDOW_MS,
+);
 
 /**
  * Custom handler for rate limit exceeded.

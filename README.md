@@ -43,6 +43,7 @@ This project is ideal for:
 
 - [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
 - [Error Reference](docs/error-reference.md) - All error types, status codes, and suggested fixes
+- [Rate Limiting](docs/rate-limiting.md) - Default limits, configuration, response headers, and retry strategies
 - [Frequently Asked Questions (FAQ)](FAQ.md) - Common setup and contribution questions
 
 ---
@@ -243,7 +244,8 @@ Visit `http://localhost:3000` after startup.
 | `HORIZON_URL`     | _(derived from `STELLAR_NETWORK`)_ | Override the Horizon server URL. When omitted, defaults to `https://horizon-testnet.stellar.org` for `testnet` and `https://horizon.stellar.org` for `mainnet`.   | ⬜ No    |
 | `PORT`            | `3000`                             | TCP port the Express server listens on.                                                                                                                           | ⬜ No    |
 | `NODE_ENV`        | `development`                      | Runtime environment. Set to `production` to enable combined HTTP logging and sanitised error messages. Set to `test` to suppress console output during test runs. | ⬜ No    |
-| `RATE_LIMIT_MAX`  | `100`                              | Maximum number of requests allowed per IP address per 15-minute window. Applies to the global rate limiter.                                                       | ⬜ No    |
+| `RATE_LIMIT_WINDOW_MS` | `900000`                       | Length of the rate-limit window, in milliseconds. See [Rate Limiting](docs/rate-limiting.md).                                                                     | ⬜ No    |
+| `RATE_LIMIT_MAX`  | `100`                              | Maximum number of requests allowed per IP address per rate-limit window. Applies to the global rate limiter.                                                      | ⬜ No    |
 | `CACHE_TTL_MS`    | `5000`                             | Cache time-to-live in milliseconds for the `/network-status` and `/fee-estimate` endpoints.                                                                       | ⬜ No    |
 | `REQUIRE_API_KEY` | `false`                            | Enables API key authentication. When true, clients must provide a valid API key via X-API-Key header.                                                             | ⬜ No    |
 | `API_KEYS`        | _(empty)_                          | Comma-separated list of valid API keys. Required when REQUIRE_API_KEY=true.                                                                                       | ⬜ No    |

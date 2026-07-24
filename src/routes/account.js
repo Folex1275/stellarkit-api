@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const { server, NETWORK, fetchAccountCreation } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
-const { makeAccountNotFoundError } = require("../utils/errors");
 const cacheService = require("../services/cache");
 
 const {
@@ -342,8 +341,6 @@ router.get("/:id/payments", async (req, res, next) => {
 
     const paymentResponse = await query.call();
     const rawRecords = paymentResponse.records || [];
-    const opResponse = await query.call();
-    const rawRecords = opResponse.records || [];
 
     const issuerCache = new Map();
     const tomlCache = new Map();
@@ -700,7 +697,8 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
-    const cacheKey = `claimable-balances:${id}`;
+    const includeExpired = req.query.includeExpired === "true";
+    const cacheKey = `claimable-balances:${id}:${includeExpired}`;
     const fresh = req.query.fresh === "true";
 
     if (!fresh) {
@@ -792,6 +790,8 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
 
       const evaluation = evaluatePredicate(claimant.predicate);
 
+      const isExpired = evaluation.reason.includes("Deadline passed");
+
       const balanceEntry = {
         id: balance.id,
         asset: balance.asset,
@@ -800,14 +800,15 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
         lastModifiedLedger: balance.last_modified_ledger,
         predicate: claimant.predicate,
         claimability: evaluation.reason,
+        isExpired,
       };
 
       if (evaluation.canClaim) {
         claimable.push(balanceEntry);
+      } else if (isExpired) {
+        if (includeExpired) expired.push(balanceEntry);
       } else if (evaluation.reason.includes("Not yet started")) {
         notYetClaimable.push(balanceEntry);
-      } else if (evaluation.reason.includes("Deadline passed")) {
-        expired.push(balanceEntry);
       } else {
         notYetClaimable.push(balanceEntry);
       }
@@ -1810,6 +1811,74 @@ router.get("/:id/pool-positions", async (req, res, next) => {
       total: positions.length,
       limit: null,
       cursor: null,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/transaction-count?since=<ISO8601>
+ * Counts transactions for an account. Without `since`, paginates through the
+ * account's entire transaction history to produce an exact count. With `since`,
+ * walks records newest-first and stops as soon as a transaction older than the
+ * cutoff is reached, avoiding a full history scan.
+ */
+router.get("/:id/transaction-count", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const sinceRaw = req.query.since;
+    let since = null;
+    if (sinceRaw !== undefined) {
+      const parsed = new Date(sinceRaw);
+      if (
+        typeof sinceRaw !== "string" ||
+        !sinceRaw.trim() ||
+        Number.isNaN(parsed.getTime())
+      ) {
+        const err = new Error(
+          `Query parameter 'since': "${sinceRaw}" is not a valid ISO 8601 date string.`,
+        );
+        err.isValidation = true;
+        err.field = "since";
+        err.receivedValue = String(sinceRaw).slice(0, 50);
+        err.expectedFormat = "ISO 8601 date string, e.g. 2024-01-01T00:00:00Z";
+        throw err;
+      }
+      since = parsed;
+    }
+
+    let count = 0;
+    let cursor;
+    let done = false;
+
+    while (!done) {
+      let query = server.transactions().forAccount(id).limit(200).order("desc");
+      if (cursor) query = query.cursor(cursor);
+
+      const page = await query.call();
+      const records = page.records || [];
+
+      if (records.length === 0) break;
+
+      for (const tx of records) {
+        if (since && new Date(tx.created_at) < since) {
+          done = true;
+          break;
+        }
+        count += 1;
+        cursor = tx.paging_token;
+      }
+
+      if (!done && records.length < 200) done = true;
+    }
+
+    return success(res, {
+      accountId: id,
+      count,
+      since: since ? since.toISOString() : null,
     });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
