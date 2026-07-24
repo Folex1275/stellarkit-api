@@ -5,7 +5,11 @@ import type {
   AccountSignersResponse,
   AccountAgeResponse,
   AccountRiskScoreResponse,
+  AccountTransactionCountResponse,
 } from "../types/index.d";
+
+/** Transaction count summary returned by `AccountModule.getTransactionCount`. */
+export type TransactionCount = AccountTransactionCountResponse["data"];
 
 /** Typed error thrown by AccountModule on non-2xx API responses. */
 export class StellarKitError extends Error {
@@ -126,5 +130,22 @@ export class AccountModule {
    */
   async getRiskScore(id: string): Promise<AccountRiskScoreResponse["data"]> {
     return this._get<AccountRiskScoreResponse["data"]>(`/account/${id}/risk-score`);
+  }
+
+  /**
+   * Get the total transaction count for an account, plus the timestamps of
+   * its first and last transactions — a lightweight summary that avoids
+   * paginating through the full transaction history.
+   *
+   * @param id - Stellar account public key.
+   * @returns Resolves to `{ count, firstTransactionAt, lastTransactionAt }`.
+   * @throws {StellarKitError} On non-2xx response (e.g. 404 account not found).
+   *
+   * @example
+   * const { count, firstTransactionAt } = await account.getTransactionCount("GAAZI4...");
+   * console.log(`${count} transactions since ${firstTransactionAt}`);
+   */
+  async getTransactionCount(id: string): Promise<TransactionCount> {
+    return this._get<TransactionCount>(`/account/${id}/transaction-count`);
   }
 }

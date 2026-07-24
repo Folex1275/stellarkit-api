@@ -651,6 +651,50 @@ router.get("/:id/age", async (req, res, next) => {
 });
 
 /**
+ * GET /account/:id/transaction-count
+ * Returns a lightweight summary of an account's total transaction count
+ * plus the timestamps of its first and last transactions, without requiring
+ * callers to paginate through the full transaction history themselves.
+ */
+router.get("/:id/transaction-count", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    await server.loadAccount(id);
+
+    let count = 0;
+    let firstTransactionAt = null;
+    let lastTransactionAt = null;
+    let cursor;
+    let done = false;
+
+    while (!done) {
+      let query = server.transactions().forAccount(id).limit(200).order("asc");
+      if (cursor) query = query.cursor(cursor);
+
+      const page = await query.call();
+      const records = page.records || [];
+
+      if (records.length === 0) break;
+
+      if (count === 0) {
+        firstTransactionAt = toISOTimestamp(records[0].created_at);
+      }
+      lastTransactionAt = toISOTimestamp(records[records.length - 1].created_at);
+      count += records.length;
+      cursor = records[records.length - 1].paging_token;
+
+      if (records.length < 200) done = true;
+    }
+
+    return success(res, { count, firstTransactionAt, lastTransactionAt });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
  * GET /account/:id/inactivity
  */
 router.get("/:id/inactivity", async (req, res, next) => {

@@ -239,6 +239,7 @@ app.get("/", (req, res) => {
         { method: "GET", path: "/account/:id/pool-positions", description: "Calculate liquidity pool positions and share values" },
         { method: "GET", path: "/account/:id/transactions/search", description: "Search account transactions by memo content" },
         { method: "GET", path: "/account/:id/volume", description: "Total transaction volume by asset over a time period" },
+        { method: "GET", path: "/account/:id/transaction-count", description: "Total transaction count, first and last transaction timestamps" },
         { method: "GET", path: "/transactions/:id", description: "Transaction history for an account" },
         { method: "GET", path: "/transactions/:id/operations", description: "Operation history for an account" },
         { method: "GET", path: "/claimable-balances/:id/evaluate/:accountId", description: "Evaluate claimability of a balance for a specific account" },
@@ -254,6 +255,7 @@ app.get("/", (req, res) => {
         { method: "GET", path: "/liquidity-pools/:id/profitability", description: "Estimate annualized fee income for a liquidity pool" },
 
         { method: "GET", path: "/dex/price/:sellAsset/:buyAsset", description: "Calculate effective exchange rate via best DEX payment path" },
+        { method: "GET", path: "/dex/top-markets", description: "Top markets ranked by recent trade activity" },
         { method: "GET", path: "/liquidity-pools/:id/profitability", description: "Estimate annualized fee income for a liquidity pool" },
         { method: "GET", path: "/liquidity-pools/:id/reserve-ratio", description: "Get reserve ratio and drift from equal for a liquidity pool" },
         { method: "GET", path: "/utils/friendbot/:accountId", description: "Fund a testnet account via Friendbot (testnet only)" },
