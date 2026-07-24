@@ -454,12 +454,15 @@ router.get("/:id/sponsorship", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
-    const [account, sponsoringResponse] = await Promise.all([
+    const [account, sponsoringResponse, offersResponse] = await Promise.all([
       server.loadAccount(id),
       server.accounts().sponsor(id).call(),
+      server.offers().forAccount(id).call(),
     ]);
 
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const BASE_RESERVE_XLM = 0.5;
+    const reserveAmount = BASE_RESERVE_XLM.toFixed(7);
+    const sponsoredEntries = [];
 
     (account.balances || []).forEach((b) => {
       if (b.sponsor) {
@@ -467,6 +470,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
           type: "trustline",
           asset: b.asset_type === "native" ? "XLM" : `${b.asset_code}:${b.asset_issuer}`,
           sponsor: b.sponsor,
+          reserveAmount,
         });
       }
     });
@@ -477,6 +481,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
           type: "signer",
           key: s.key,
           sponsor: s.sponsor,
+          reserveAmount,
         });
       }
     });
@@ -489,44 +494,30 @@ router.get("/:id/sponsorship", async (req, res, next) => {
             type: "data_entry",
             key,
             sponsor: dataSponsors[key],
+            reserveAmount,
           });
         }
-        if (!op.transaction_successful) {
-          cursor = op.paging_token;
-          continue;
-        }
-
-        const assetCode = op.asset_code || "XLM";
-        const assetIssuer = op.asset_issuer || null;
-        const assetKey = assetIssuer ? `${assetCode}:${assetIssuer}` : assetCode;
-        const amount = parseFloat(op.amount || op.starting_balance || "0");
-
-        if (!volumeMap[assetKey]) {
-          volumeMap[assetKey] = {
-            assetCode,
-            assetIssuer,
-            totalSent: 0,
-            totalReceived: 0,
-          };
-        }
-
-        const isSent = (op.type === "payment" && op.from === id) || (op.type === "create_account" && op.funder === id);
-        if (isSent) volumeMap[assetKey].totalSent += amount;
-        else volumeMap[assetKey].totalReceived += amount;
-
-        totalTransactions++;
-        cursor = op.paging_token;
-      }
-
-      if (records.length < 200) done = true;
+      });
     }
+
+    (offersResponse.records || []).forEach((offer) => {
+      if (offer.sponsor) {
+        sponsoredEntries.push({
+          type: "offer",
+          offerId: offer.id,
+          sponsor: offer.sponsor,
+          reserveAmount,
+        });
+      }
+    });
 
     const accountsSponsoring = (sponsoringResponse.records || []).map((acc) => acc.id);
 
     return success(res, {
-      period: { days, from: since.toISOString(), to: new Date().toISOString() },
-      totalTransactions,
-      volumeByAsset,
+      accountId: account.id,
+      accountSponsor: account.sponsor || null,
+      sponsoredEntries,
+      accountsSponsoring,
     });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);

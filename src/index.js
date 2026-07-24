@@ -14,12 +14,9 @@ const rateLimiter = require("./middleware/rateLimiter");
 const contentTypeValidator = require("./middleware/contentTypeValidator");
 const bodySizeLimit = require("./middleware/bodySizeLimit");
 const errorHandler = require("./middleware/errorHandler");
-<<<<<<< HEAD
 const requestIdMiddleware = require("./middleware/requestId");
-=======
 const apiKeyMiddleware = require("./middleware/apiKeyAuth");
 const sanitize = require("./middleware/sanitize");
->>>>>>> f13de3bc2aa5b1589ee41cb19e8aeead312a3b96
 
 const networkStatusRouter = require("./routes/networkStatus");
 const feeEstimateRouter = require("./routes/feeEstimate");
@@ -33,6 +30,7 @@ const utilsRouter = require("./routes/utils");
 const stellarTomlRouter = require("./routes/stellarToml");
 const claimableBalancesRouter = require("./routes/claimableBalances");
 const cacheStatsRouter = require("./routes/cacheStats");
+const sorobanRouter = require("./routes/soroban");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -202,6 +200,7 @@ app.use("/utils", utilsRouter);
 app.use("/stellar-toml", stellarTomlRouter);
 app.use("/claimable-balances", claimableBalancesRouter);
 app.use("/cache", cacheStatsRouter);
+app.use("/soroban", sorobanRouter);
 
 // ── Root ─────────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
@@ -263,6 +262,8 @@ app.get("/", (req, res) => {
         { method: "GET", path: "/utils/validate-account?id=:id", description: "Validate a Stellar public key format (no Horizon call)" },
         { method: "WS", path: "/stream/ledgers", description: "Real-time stream of live Stellar ledger updates" },
         { method: "GET", path: "/cache/stats", description: "Cache hit rate and performance statistics" },
+        { method: "GET", path: "/soroban/contract/:id", description: "Soroban contract instance details (executable type, wasm hash)" },
+        { method: "GET", path: "/soroban/contract/:id/storage", description: "Soroban contract instance-storage entries" },
       ],
       docs: "https://github.com/stellarkit-lab-devtools/stellarkit-api#readme",
     },

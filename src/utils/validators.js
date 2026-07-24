@@ -28,6 +28,25 @@ function validateAccountId(accountId) {
   }
 }
 
+function validateContractId(contractId) {
+  if (!contractId) {
+    throw makeValidationError(
+      "Contract ID is required.",
+      "contractId",
+      contractId,
+      "C... (valid Soroban contract address)"
+    );
+  }
+  if (!StrKey.isValidContract(contractId)) {
+    throw makeValidationError(
+      `Invalid Soroban contract ID. Must be a valid contract address starting with "C".`,
+      "contractId",
+      contractId,
+      "CCJZ5DGASBWQXR5MPFCJXMBI333XE5U3FSJTNQU7RIKE3P5GN2K2WYD2"
+    );
+  }
+}
+
 function validateAssetCode(code) {
   if (!code) {
     throw makeValidationError(
@@ -74,4 +93,4 @@ function validateOrder(order) {
   return lowerOrder;
 }
 
-module.exports = { validateAccountId, validateAssetCode, validateLimit, validateOrder };
+module.exports = { validateAccountId, validateContractId, validateAssetCode, validateLimit, validateOrder };
