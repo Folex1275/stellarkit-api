@@ -69,6 +69,7 @@ try {
       const account = await this._get(`/account/${id}`);
       return { accountId: account.accountId, signers: account.signers, thresholds: account.thresholds };
     }
+    getSigningKeys(id) { return this._get(`/account/${id}/signing-keys`); }
     getAge(id) { return this._get(`/account/${id}/age`); }
     getRiskScore(id) { return this._get(`/account/${id}/risk-score`); }
     getAccountData(id) { return this.getAccount(id); }
@@ -149,6 +150,12 @@ const RISK_DATA = {
   score: 75,
   label: "low",
   factors: [{ name: "Account Age", value: "365 days", impact: "positive", detail: "Over a year old." }],
+};
+
+const SIGNING_KEYS_DATA = {
+  signers: [{ key: ACCOUNT_ID, type: "ed25519_public_key", weight: 1, sponsoredBy: null }],
+  masterWeight: 1,
+  thresholds: { lowThreshold: 0, medThreshold: 0, highThreshold: 0 },
 };
 
 const PAYMENTS_DATA = {
@@ -361,6 +368,27 @@ describe("AccountModule", () => {
     it("throws StellarKitError when account not found", async () => {
       mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
       await expect(module.getSigners(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
+    });
+  });
+
+  // ── getSigningKeys ────────────────────────────────────────────────────────
+
+  describe("getSigningKeys", () => {
+    it("calls GET /account/:id/signing-keys and resolves data", async () => {
+      mockFetch(200, { success: true, data: SIGNING_KEYS_DATA });
+      const data = await module.getSigningKeys(ACCOUNT_ID);
+      expect(Array.isArray(data.signers)).toBe(true);
+      expect(data.masterWeight).toBe(1);
+      expect(data.thresholds).toEqual(SIGNING_KEYS_DATA.thresholds);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/signing-keys`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError on failure", async () => {
+      mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
+      await expect(module.getSigningKeys(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
     });
   });
 

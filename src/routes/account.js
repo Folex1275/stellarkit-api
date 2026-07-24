@@ -41,6 +41,60 @@ function validateLimit(limit, max = 200) {
   return n;
 }
 
+function normalizeSignerType(type) {
+  const normalized = String(type || "").toLowerCase();
+
+  if (
+    normalized === "ed25519_public_key" ||
+    normalized === "ed25519" ||
+    normalized === "signer_key_type_ed25519"
+  ) {
+    return "ed25519_public_key";
+  }
+
+  if (
+    normalized === "sha256_hash" ||
+    normalized === "hash_x" ||
+    normalized === "signer_key_type_hash_x"
+  ) {
+    return "hash_x";
+  }
+
+  if (
+    normalized === "preauth_tx" ||
+    normalized === "pre_auth_tx" ||
+    normalized === "signer_key_type_pre_auth_tx"
+  ) {
+    return "pre_auth_tx";
+  }
+
+  return type || "unknown";
+}
+
+function normalizeSigningKeysResponse(account) {
+  const signers = (account.signers || []).map((signer) => ({
+    key: signer.key,
+    weight: Number(signer.weight) || 0,
+    type: normalizeSignerType(signer.type),
+    sponsoredBy: signer.sponsor || signer.sponsored_by || null,
+  }));
+
+  const masterSigner = signers.find(
+    (signer) =>
+      signer.key === account.id && signer.type === "ed25519_public_key",
+  );
+
+  return {
+    signers,
+    masterWeight: masterSigner ? masterSigner.weight : 0,
+    thresholds: {
+      lowThreshold: account.thresholds?.low_threshold ?? 0,
+      medThreshold: account.thresholds?.med_threshold ?? 0,
+      highThreshold: account.thresholds?.high_threshold ?? 0,
+    },
+  };
+}
+
 function handleAccountNotFound(err, next, accountId) {
   if (err && err.response && err.response.status === 404) {
     return next(makeAccountNotFoundError(accountId, NETWORK));
@@ -233,6 +287,21 @@ router.get("/:id/sequence", async (req, res, next) => {
       sequence: account.sequence,
       lastModifiedLedger: account.last_modified_ledger,
     });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/signing-keys
+ */
+router.get("/:id/signing-keys", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+    return success(res, normalizeSigningKeysResponse(account));
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
