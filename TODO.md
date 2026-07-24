@@ -1,5 +1,11 @@
 # TODO
 
+## Error Handling Enrichment | Add a specific error for insufficient XLM reserve
+- [x] Step 1: Add `makeInsufficientXLMReserveError()` to `src/utils/errors.js`
+- [x] Step 2: Update `src/middleware/errorHandler.js` to handle `isInsufficientXLMReserve`
+- [x] Step 3: Add tests in `tests/errorHandler.test.js`
+- [x] Step 4: Run tests to verify
+
 ## Cache bypass documentation (?fresh=true)
 - [ ] Confirm all endpoints that respect `?fresh=true` (likely `/network-status` and `/fee-estimate` and their subroutes).
 - [ ] Update `README.md` with a “fresh cache bypass” section and request examples.

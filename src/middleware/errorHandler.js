@@ -98,6 +98,24 @@ function errorHandler(err, req, res, next) {
     });
   }
 
+  // InsufficientXLMReserve errors
+  if (err.isInsufficientXLMReserve) {
+    logError(422, req, err.message);
+    return res.status(422).json({
+      success: false,
+      error: {
+        type: "InsufficientXLMReserve",
+        message: err.message,
+        accountId: err.accountId,
+        availableBalance: err.availableBalance,
+        requiredReserve: err.requiredReserve,
+        shortfall: err.shortfall,
+        suggestion:
+          "Add more XLM to the account or remove unused subentries (e.g., trustlines, offers, data entries) to free up reserve.",
+      },
+    });
+  }
+
   // Validation errors (thrown manually)
   if (err.isValidation) {
     const ske = new StellarKitError(
