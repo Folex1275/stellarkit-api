@@ -2073,4 +2073,67 @@ router.get("/:id/data", async (req, res, next) => {
   }
 });
 
+/**
+ * GET /account/:id/transaction-count
+ * Returns the total number of transactions for an account.
+ *
+ * Transaction counts only change when new transactions are submitted, making
+ * short-term caching effective. Responses are cached per account ID.
+ *
+ * Query params:
+ *   - fresh (boolean, default: false) — bypasses the cache when set to "true"
+ *
+ * Response headers:
+ *   - X-Cache: HIT  — served from cache
+ *   - X-Cache: MISS — fetched live from Horizon and cached
+ *
+ * Cache TTL is configurable via the CACHE_TTL_TX_COUNT_MS environment variable
+ * (default: 20 000 ms / 20 seconds).
+ */
+router.get("/:id/transaction-count", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const fresh = req.query.fresh === "true";
+    const cacheKey = `transaction-count:${id}`;
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached !== undefined) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
+    // Page through all transactions counting records until Horizon returns an
+    // empty page. Using limit=200 (the Horizon maximum) minimises round trips.
+    let count = 0;
+    let cursor;
+    do {
+      let query = server
+        .transactions()
+        .forAccount(id)
+        .limit(200)
+        .order("asc");
+      if (cursor) query = query.cursor(cursor);
+
+      const response = await query.call();
+      const records = response.records || [];
+      count += records.length;
+
+      if (records.length < 200) break;
+      cursor = records[records.length - 1].paging_token;
+    } while (true); // eslint-disable-line no-constant-condition
+
+    const data = { accountId: id, transactionCount: count };
+
+    cacheService.set(cacheKey, data, cacheTTL.transactionCount);
+    res.set("X-Cache", "MISS");
+    return success(res, data);
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
 module.exports = router;
