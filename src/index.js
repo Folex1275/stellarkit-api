@@ -31,6 +31,7 @@ const utilsRouter = require("./routes/utils");
 const stellarTomlRouter = require("./routes/stellarToml");
 const claimableBalancesRouter = require("./routes/claimableBalances");
 const cacheStatsRouter = require("./routes/cacheStats");
+const sorobanRouter = require("./routes/soroban");
 const networkRouter = require("./routes/network");
 
 const app = express();
@@ -220,6 +221,7 @@ app.use("/utils", utilsRouter);
 app.use("/stellar-toml", stellarTomlRouter);
 app.use("/claimable-balances", etagMiddleware, claimableBalancesRouter);
 app.use("/cache", cacheStatsRouter);
+app.use("/soroban", sorobanRouter);
 app.use("/network", etagMiddleware, networkRouter);
 const transactionEffectsRouter = require("./routes/transaction.effects");
 app.use("/transaction", etagMiddleware, transactionEffectsRouter);
@@ -236,6 +238,45 @@ app.get("/", (req, res) => {
       network: process.env.STELLAR_NETWORK || "testnet",
       endpoints: [
         { method: "GET", path: "/health", description: "Service health check" },
+        { method: "GET", path: "/network-status", description: "Latest ledger, fees, and protocol info" },
+        { method: "GET", path: "/fee-estimate", description: "Fee tiers for transaction submission" },
+        { method: "GET", path: "/fee-estimate?operations=N", description: "Fee estimate for N operations" },
+        { method: "GET", path: "/fee-estimate/surge-status", description: "Identify fee surge periods and get actionable recommendations" },
+        { method: "GET", path: "/fee-estimate/trends", description: "Analyze fee trends across last 50 ledgers with statistical summary" },
+        { method: "GET", path: "/account/:id", description: "Account details, balances, signers" },
+        { method: "GET", path: "/account/:id/age", description: "Account age and longevity metrics" },
+        { method: "GET", path: "/account/:id/balances", description: "XLM and asset balances for an account" },
+        { method: "GET", path: "/account/:id/sequence", description: "Current sequence number for an account" },
+        { method: "GET", path: "/account/:id/freeze-status/:assetCode/:assetIssuer", description: "Check if an asset is frozen on an account" },
+        { method: "GET", path: "/account/:id/can-receive/:assetCode/:assetIssuer", description: "Check if an account can receive a specific asset" },
+        { method: "POST", path: "/account/:id/multisig-plan", description: "Plan multisig transactions by calculating signer combinations for each threshold" },
+        { method: "GET", path: "/account/:id/pool-positions", description: "Calculate liquidity pool positions and share values" },
+        { method: "GET", path: "/account/:id/transactions/search", description: "Search account transactions by memo content" },
+        { method: "GET", path: "/account/:id/volume", description: "Total transaction volume by asset over a time period" },
+        { method: "GET", path: "/transactions/:id", description: "Transaction history for an account" },
+        { method: "GET", path: "/transactions/:id/operations", description: "Operation history for an account" },
+        { method: "GET", path: "/claimable-balances/:id/evaluate/:accountId", description: "Evaluate claimability of a balance for a specific account" },
+        { method: "GET", path: "/asset/:code/:issuer", description: "Asset metadata and statistics" },
+        { method: "GET", path: "/asset/:code/:issuer/holders", description: "Paginated accounts holding an asset" },
+        { method: "GET", path: "/asset/:code/:issuer/verify", description: "Verify asset issuer via account flags, home_domain, and stellar.toml" },
+        { method: "GET", path: "/asset/search?code=:code", description: "Search assets by code across all issuers" },
+        { method: "GET", path: "/dex/arbitrage/:code/:issuer", description: "Find profitable circular arbitrage paths for an asset" },
+        { method: "GET", path: "/dex/spread/:sellAsset/:buyAsset", description: "Calculate bid-ask spread for a DEX trading pair" },
+        { method: "GET", path: "/dex/imbalance/:sellAsset/:buyAsset", description: "Detect buy/sell pressure imbalance on a trading pair" },
+        { method: "GET", path: "/account/:id/counterparties", description: "Analyze frequent payment counterparties for an account" },
+        { method: "GET", path: "/network/ledger-timing", description: "Analyze network ledger close time consistency" },
+        { method: "GET", path: "/liquidity-pools/:id/profitability", description: "Estimate annualized fee income for a liquidity pool" },
+
+        { method: "GET", path: "/dex/price/:sellAsset/:buyAsset", description: "Calculate effective exchange rate via best DEX payment path" },
+        { method: "GET", path: "/liquidity-pools/:id/profitability", description: "Estimate annualized fee income for a liquidity pool" },
+        { method: "GET", path: "/liquidity-pools/:id/reserve-ratio", description: "Get reserve ratio and drift from equal for a liquidity pool" },
+        { method: "GET", path: "/utils/friendbot/:accountId", description: "Fund a testnet account via Friendbot (testnet only)" },
+        { method: "GET", path: "/utils/convert?xlm=:xlm", description: "Convert between XLM and stroops" },
+        { method: "GET", path: "/utils/validate-account?id=:id", description: "Validate a Stellar public key format (no Horizon call)" },
+        { method: "WS", path: "/stream/ledgers", description: "Real-time stream of live Stellar ledger updates" },
+        { method: "GET", path: "/cache/stats", description: "Cache hit rate and performance statistics" },
+        { method: "GET", path: "/soroban/contract/:id", description: "Soroban contract instance details (executable type, wasm hash)" },
+        { method: "GET", path: "/soroban/contract/:id/storage", description: "Soroban contract instance-storage entries" },
         {
           method: "GET",
           path: "/network-status",

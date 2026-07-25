@@ -32,6 +32,25 @@ function validateAccountId(accountId) {
   }
 }
 
+function validateContractId(contractId) {
+  if (!contractId) {
+    throw makeValidationError(
+      "Contract ID is required.",
+      "contractId",
+      contractId,
+      "C... (valid Soroban contract address)"
+    );
+  }
+  if (!StrKey.isValidContract(contractId)) {
+    throw makeValidationError(
+      `Invalid Soroban contract ID. Must be a valid contract address starting with "C".`,
+      "contractId",
+      contractId,
+      "CCJZ5DGASBWQXR5MPFCJXMBI333XE5U3FSJTNQU7RIKE3P5GN2K2WYD2"
+    );
+  }
+}
+
 /**
  * Validate an asset code and ensure it matches the expected Stellar format.
  *
@@ -102,6 +121,7 @@ function validateOrder(order) {
   return lowerOrder;
 }
 
+module.exports = { validateAccountId, validateContractId, validateAssetCode, validateLimit, validateOrder };
 /**
  * Validates a Stellar asset defined by a code and issuer route parameter pair.
  *

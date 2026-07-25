@@ -1072,11 +1072,14 @@ router.get("/:id/sponsorship", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
-    const [account, sponsoringResponse] = await Promise.all([
+    const [account, sponsoringResponse, offersResponse] = await Promise.all([
       server.loadAccount(id),
       server.accounts().sponsor(id).call(),
+      server.offers().forAccount(id).call(),
     ]);
 
+    const BASE_RESERVE_XLM = 0.5;
+    const reserveAmount = BASE_RESERVE_XLM.toFixed(7);
     const sponsoredEntries = [];
 
     (account.balances || []).forEach((b) => {
@@ -1088,6 +1091,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
               ? "XLM"
               : `${b.asset_code}:${b.asset_issuer}`,
           sponsor: b.sponsor,
+          reserveAmount,
         });
       }
     });
@@ -1098,6 +1102,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
           type: "signer",
           key: s.key,
           sponsor: s.sponsor,
+          reserveAmount,
         });
       }
     });
@@ -1110,10 +1115,22 @@ router.get("/:id/sponsorship", async (req, res, next) => {
             type: "data_entry",
             key,
             sponsor: dataSponsors[key],
+            reserveAmount,
           });
         }
       });
     }
+
+    (offersResponse.records || []).forEach((offer) => {
+      if (offer.sponsor) {
+        sponsoredEntries.push({
+          type: "offer",
+          offerId: offer.id,
+          sponsor: offer.sponsor,
+          reserveAmount,
+        });
+      }
+    });
 
     const accountsSponsoring = (sponsoringResponse.records || []).map(
       (acc) => acc.id,
@@ -1121,6 +1138,9 @@ router.get("/:id/sponsorship", async (req, res, next) => {
 
     return success(res, {
       accountId: account.id,
+      accountSponsor: account.sponsor || null,
+      sponsoredEntries,
+      accountsSponsoring,
       sponsoredEntries,
       accountsSponsoring,
       count: sponsoredEntries.length,
