@@ -282,7 +282,7 @@ router.post("/batch-status", async (req, res, next) => {
     }
 
     if (hashes.length === 0) {
-      return success(res, []);
+      return success(res, { items: [], total: 0 });
     }
 
     if (hashes.length > 20) {
@@ -333,7 +333,7 @@ router.post("/batch-status", async (req, res, next) => {
       })
     );
 
-    return success(res, statusResults);
+    return success(res, { items: statusResults, total: statusResults.length });
   } catch (err) {
     next(err);
   }

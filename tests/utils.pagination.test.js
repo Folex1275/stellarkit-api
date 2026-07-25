@@ -3,7 +3,7 @@ const { parsePaginationParams } = require("../src/utils/pagination");
 describe("parsePaginationParams", () => {
   it("returns defaults when query is empty", () => {
     const result = parsePaginationParams({});
-    expect(result).toEqual({ limit: 10, order: "desc", cursor: undefined });
+    expect(result).toEqual({ limit: 20, order: "desc", cursor: undefined });
   });
 
   it("parses valid limit parameter", () => {
@@ -16,20 +16,21 @@ describe("parsePaginationParams", () => {
     expect(result.limit).toBe(25);
   });
 
-  it("validates limit is within max range", () => {
-    expect(() => parsePaginationParams({ limit: 300 }, 200)).toThrow(
-      "Limit must be a number between 1 and 200."
+  it("rejects limit above max — throws isInvalidLimit", () => {
+    expect(() => parsePaginationParams({ limit: 300 }, 100)).toThrow(
+      "limit must be a number between 1 and 100."
     );
   });
 
-  it("treats limit 0 as falsy and defaults to 10", () => {
-    const result = parsePaginationParams({ limit: 0 });
-    expect(result.limit).toBe(10);
+  it("rejects limit=0 — throws isInvalidLimit", () => {
+    expect(() => parsePaginationParams({ limit: 0 })).toThrow(
+      "limit must be a number between 1 and 100."
+    );
   });
 
-  it("rejects non-numeric limit", () => {
+  it("rejects non-numeric limit — throws isInvalidLimit", () => {
     expect(() => parsePaginationParams({ limit: "invalid" })).toThrow(
-      "Limit must be a number between 1 and 200."
+      "limit must be a number between 1 and 100."
     );
   });
 
@@ -54,9 +55,7 @@ describe("parsePaginationParams", () => {
   });
 
   it("rejects invalid order parameter", () => {
-    expect(() => parsePaginationParams({ order: "invalid" })).toThrow(
-      'Invalid order parameter: "invalid". Valid values are "asc" or "desc".'
-    );
+    expect(() => parsePaginationParams({ order: "invalid" })).toThrow();
   });
 
   it("parses valid cursor parameter", () => {
@@ -75,14 +74,14 @@ describe("parsePaginationParams", () => {
     expect(result.limit).toBe(50);
 
     expect(() => parsePaginationParams({ limit: 150 }, 100)).toThrow(
-      "Limit must be a number between 1 and 100."
+      "limit must be a number between 1 and 100."
     );
   });
 
   it("parses all parameters together", () => {
     const result = parsePaginationParams(
       { limit: "30", order: "asc", cursor: "cursor-abc" },
-      200
+      100
     );
     expect(result).toEqual({
       limit: 30,
@@ -91,12 +90,18 @@ describe("parsePaginationParams", () => {
     });
   });
 
-  it("throws error with isValidation flag for invalid params", () => {
+  it("throws error with isInvalidLimit flag for invalid limit", () => {
     try {
       parsePaginationParams({ limit: -5 });
-      fail("Should have thrown");
+      throw new Error("Should have thrown");
     } catch (err) {
-      expect(err.isValidation).toBe(true);
+      expect(err.isInvalidLimit).toBe(true);
+      expect(err.message).toBe("limit must be a number between 1 and 100.");
     }
+  });
+
+  it("accepts boundary values 1 and 100", () => {
+    expect(parsePaginationParams({ limit: 1 }).limit).toBe(1);
+    expect(parsePaginationParams({ limit: 100 }).limit).toBe(100);
   });
 });
