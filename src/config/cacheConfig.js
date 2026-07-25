@@ -82,6 +82,12 @@ const cacheTTL = {
     process.env.CACHE_TTL_TX_COUNT_MS,
     20000
   ),
+
+  /** /dex/top-markets — trade aggregation window, refresh every 60 s by default */
+  topMarkets: msToSeconds(
+    process.env.CACHE_TTL_TOP_MARKETS_MS,
+    60000
+  ),
 };
 
 module.exports = cacheTTL;
