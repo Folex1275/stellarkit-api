@@ -11,6 +11,7 @@ jest.mock("../src/config/stellar", () => {
     server: {
       loadAccount: jest.fn(),
       accounts: jest.fn(),
+      offers: jest.fn(),
     },
   };
 });
@@ -70,10 +71,21 @@ describe("Account Sponsorship API", () => {
         ],
       };
 
+      const mockOffers = {
+        records: [
+          { id: "OFFER_1", sponsor: sponsorId },
+          { id: "OFFER_2", sponsor: null },
+        ],
+      };
+
       server.loadAccount.mockResolvedValue(mockAccount);
       server.accounts.mockReturnValue({
         sponsor: jest.fn().mockReturnThis(),
         call: jest.fn().mockResolvedValue(mockSponsoringAccounts),
+      });
+      server.offers.mockReturnValue({
+        forAccount: jest.fn().mockReturnThis(),
+        call: jest.fn().mockResolvedValue(mockOffers),
       });
 
       const res = await request(app).get(`/account/${accountId}/sponsorship`);
@@ -82,8 +94,13 @@ describe("Account Sponsorship API", () => {
       expect(res.body.success).toBe(true);
       expect(res.body.data.accountId).toBe(accountId);
       expect(res.body.data.accountSponsor).toBe(sponsorId);
-      expect(res.body.data.sponsoredEntries).toHaveLength(4); // 2 trustlines + 1 signer + 1 data entry
-      
+      expect(res.body.data.sponsoredEntries).toHaveLength(5); // 2 trustlines + 1 signer + 1 data entry + 1 offer
+
+      for (const entry of res.body.data.sponsoredEntries) {
+        expect(entry.reserveAmount).toBe("0.5000000");
+        expect(Object.keys(entry).every((k) => !k.includes("_"))).toBe(true);
+      }
+
       const trustlines = res.body.data.sponsoredEntries.filter(e => e.type === "trustline");
       expect(trustlines).toHaveLength(2);
       expect(trustlines[0].sponsor).toBe(sponsorId);
@@ -95,6 +112,11 @@ describe("Account Sponsorship API", () => {
       const dataEntries = res.body.data.sponsoredEntries.filter(e => e.type === "data_entry");
       expect(dataEntries).toHaveLength(1);
       expect(dataEntries[0].sponsor).toBe(sponsorId);
+
+      const offers = res.body.data.sponsoredEntries.filter(e => e.type === "offer");
+      expect(offers).toHaveLength(1);
+      expect(offers[0].offerId).toBe("OFFER_1");
+      expect(offers[0].sponsor).toBe(sponsorId);
 
       expect(res.body.data.accountsSponsoring).toEqual(["G_SPONSORED_ACCOUNT_1"]);
     });
@@ -113,6 +135,10 @@ describe("Account Sponsorship API", () => {
         sponsor: jest.fn().mockReturnThis(),
         call: jest.fn().mockResolvedValue({ records: [] }),
       });
+      server.offers.mockReturnValue({
+        forAccount: jest.fn().mockReturnThis(),
+        call: jest.fn().mockResolvedValue({ records: [] }),
+      });
 
       const res = await request(app).get(`/account/${accountId}/sponsorship`);
 
@@ -127,7 +153,7 @@ describe("Account Sponsorship API", () => {
 
       expect(res.statusCode).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.error.type).toBe("ValidationError");
+      expect(res.body.error.type).toBe("InvalidAccountId");
     });
   });
 });
