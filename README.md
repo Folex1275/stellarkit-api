@@ -41,6 +41,8 @@ This project is ideal for:
 
 ## Documentation
 
+- [SDK Migration Guide](docs/sdk-migration.md) — migrating from the JavaScript SDK to the TypeScript SDK
+- [SDK README](sdk/README.md) — JavaScript client usage and method reference
 - [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
 - [Error Reference](docs/error-reference.md) - All error types, status codes, and suggested fixes
 - [Frequently Asked Questions (FAQ)](FAQ.md) - Common setup and contribution questions
@@ -80,6 +82,7 @@ This project is ideal for:
 | GET | `/account/:id/offers` | Open DEX offers for an account | `limit`, `cursor` |
 | GET | `/account/:id/offer-history` | Historical offer operations | `limit`, `order`, `cursor` |
 | GET | `/account/:id/analytics` | Basic account activity analytics | — |
+| GET | `/account/:id/transaction-count` | Total transaction count, first and last transaction timestamps | — |
 | GET | `/account/:id/inactivity` | Days since last transaction and status | — |
 | GET | `/account/:id/volume` | Transaction volume by asset over a time period | `days` |
 | GET | `/account/:id/freeze-status/:assetCode/:assetIssuer` | Check if an asset is frozen on an account | — |
@@ -119,6 +122,7 @@ This project is ideal for:
 | GET | `/dex/depth/:sellAsset/:buyAsset` | Full order book depth analysis | — |
 | GET | `/dex/imbalance/:sellAsset/:buyAsset` | Buy/sell pressure imbalance detection | — |
 | GET | `/dex/arbitrage/:assetCode/:assetIssuer` | Circular arbitrage path discovery | — |
+| GET | `/dex/top-markets` | Top markets ranked by recent trade activity | `limit` |
 
 ### Liquidity Pools
 

@@ -5,7 +5,7 @@ registerParamValidation(router);
 const { Asset } = require("@stellar/stellar-sdk");
 const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
-const { validateAssetCode, validateAccountId, validateAsset } = require("../utils/validators");
+const { validateAssetCode, validateAccountId, validateAsset, validateLimit } = require("../utils/validators");
 const { parseStellarAsset } = require("../utils/asset");
 
 /**
@@ -450,6 +450,95 @@ router.get("/price/:sellAsset/:buyAsset", async (req, res, next) => {
         error: { type: "NotFound", message: "No payment path exists between these two assets." },
       });
     }
+    next(err);
+  }
+});
+
+/**
+ * GET /dex/top-markets
+ * Aggregates recent trades across the Stellar DEX into per-pair markets
+ * ranked by trade count, with bid-ask spread computed for each top market.
+ *
+ * @example
+ * GET /dex/top-markets?limit=5
+ */
+router.get("/top-markets", async (req, res, next) => {
+  try {
+    const limit = req.query.limit === undefined ? 10 : validateLimit(req.query.limit, 50);
+
+    const tradesResponse = await server.trades().order("desc").limit(200).call();
+    const trades = tradesResponse.records || [];
+
+    const tradeAsset = (type, code, issuer) => ({
+      code: type === "native" ? "XLM" : code,
+      issuer: type === "native" ? null : issuer,
+      type,
+    });
+
+    const marketsByKey = new Map();
+
+    for (const trade of trades) {
+      const base = tradeAsset(trade.base_asset_type, trade.base_asset_code, trade.base_asset_issuer);
+      const counter = tradeAsset(trade.counter_asset_type, trade.counter_asset_code, trade.counter_asset_issuer);
+      const key = `${base.code}:${base.issuer || "native"}/${counter.code}:${counter.issuer || "native"}`;
+
+      if (!marketsByKey.has(key)) {
+        marketsByKey.set(key, {
+          baseAsset: base,
+          counterAsset: counter,
+          baseVolume: 0,
+          counterVolume: 0,
+          tradeCount: 0,
+        });
+      }
+
+      const market = marketsByKey.get(key);
+      market.baseVolume += parseFloat(trade.base_amount || "0");
+      market.counterVolume += parseFloat(trade.counter_amount || "0");
+      market.tradeCount += 1;
+    }
+
+    const ranked = Array.from(marketsByKey.values())
+      .sort((a, b) => b.tradeCount - a.tradeCount)
+      .slice(0, limit);
+
+    const toSdkAsset = (asset) =>
+      asset.type === "native" ? Asset.native() : new Asset(asset.code, asset.issuer);
+
+    const markets = await Promise.all(
+      ranked.map(async (market) => {
+        let spread = null;
+        try {
+          const orderBook = await server
+            .orderbook(toSdkAsset(market.baseAsset), toSdkAsset(market.counterAsset))
+            .limit(1)
+            .call();
+
+          const bestBid = (orderBook.bids || [])[0];
+          const bestAsk = (orderBook.asks || [])[0];
+          if (bestBid && bestAsk) {
+            const bidPrice = parseFloat(bestBid.price);
+            const askPrice = parseFloat(bestAsk.price);
+            const midPrice = (bidPrice + askPrice) / 2;
+            spread = (((askPrice - bidPrice) / midPrice) * 100).toFixed(4);
+          }
+        } catch (_) {
+          spread = null;
+        }
+
+        return {
+          baseAsset: market.baseAsset,
+          counterAsset: market.counterAsset,
+          baseVolume: market.baseVolume.toFixed(7),
+          counterVolume: market.counterVolume.toFixed(7),
+          tradeCount: market.tradeCount,
+          spread,
+        };
+      }),
+    );
+
+    return success(res, markets);
+  } catch (err) {
     next(err);
   }
 });
