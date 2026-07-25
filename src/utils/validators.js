@@ -10,6 +10,43 @@ const { StrKey } = require("@stellar/stellar-sdk");
  */
 function qp(param, msg) {
   return `Query param '${param}' ${msg}`;
+ * Build a query-parameter error message in the form "Query parameter '<field>': <detail>".
+ * @param {string} field
+ * @param {string} detail
+ * @returns {string}
+ */
+function qp(field, detail) {
+  return `Query parameter '${field}': ${detail}`;
+}
+
+/**
+ * Creates a structured InvalidAccountId error.
+ * @param {string} accountId
+ * @returns {Error}
+ */
+function makeInvalidAccountIdError(accountId) {
+  const err = new Error(
+    `"${String(accountId).slice(0, 60)}" is not a valid Stellar account address.`
+  );
+  err.isInvalidAccountId = true;
+  err.accountId = accountId;
+  err.suggestion = "Account addresses start with G and are 56 characters long.";
+  err.status = 400;
+  return err;
+}
+
+/**
+ * Creates a structured InvalidAsset error.
+ * @param {string} message
+ * @param {string} suggestion
+ * @returns {Error}
+ */
+function makeInvalidAssetError(message, suggestion) {
+  const err = new Error(message);
+  err.isInvalidAsset = true;
+  err.suggestion = suggestion || null;
+  err.status = 400;
+  return err;
 }
 
 /**
@@ -44,6 +81,25 @@ function validateAccountId(accountId) {
   }
 }
 
+function validateContractId(contractId) {
+  if (!contractId) {
+    throw makeValidationError(
+      "Contract ID is required.",
+      "contractId",
+      contractId,
+      "C... (valid Soroban contract address)"
+    );
+  }
+  if (!StrKey.isValidContract(contractId)) {
+    throw makeValidationError(
+      `Invalid Soroban contract ID. Must be a valid contract address starting with "C".`,
+      "contractId",
+      contractId,
+      "CCJZ5DGASBWQXR5MPFCJXMBI333XE5U3FSJTNQU7RIKE3P5GN2K2WYD2"
+    );
+  }
+}
+
 /**
  * Validate an asset code and ensure it matches the expected Stellar format.
  *
@@ -73,20 +129,22 @@ function validateAssetCode(code) {
 /**
  * Validate a numeric limit value and ensure it falls within the allowed range.
  *
+ * Throws an error with `isInvalidLimit = true` and the standardised
+ * { type: "InvalidLimit", message, suggestion } shape when invalid.
+ *
  * @param {number|string} limit - The requested limit value to validate.
- * @param {number} [max=200] - Maximum allowable limit value.
+ * @param {number} [max=100] - Maximum allowable limit value.
  * @returns {number} The parsed limit as an integer when valid.
- * @throws {Error} Throws a validation error when the limit is missing, non-numeric, or out of range.
+ * @throws {Error} Throws an InvalidLimit error when the limit is non-numeric, <= 0, or > max.
  */
-function validateLimit(limit, max = 200) {
-  const parsed = parseInt(limit);
+function validateLimit(limit, max = 100) {
+  const parsed = parseInt(limit, 10);
   if (isNaN(parsed) || parsed < 1 || parsed > max) {
-    throw makeValidationError(
-      qp("limit", `must be between 1 and ${max}.`),
-      "limit",
-      limit,
-      `1–${max}`
-    );
+    const err = new Error("limit must be a number between 1 and 100.");
+    err.isInvalidLimit = true;
+    err.status = 400;
+    err.receivedValue = limit !== undefined ? String(limit).slice(0, 50) : undefined;
+    throw err;
   }
   return parsed;
 }
@@ -103,6 +161,7 @@ function validateOrder(order) {
   const lowerOrder = String(order).toLowerCase();
   if (!["asc", "desc"].includes(lowerOrder)) {
     throw makeValidationError(
+      `Invalid order parameter: "${order}". Valid values are "asc" or "desc".`,
       qp("order", 'must be either "asc" or "desc".'),
       "order",
       order,
@@ -112,6 +171,7 @@ function validateOrder(order) {
   return lowerOrder;
 }
 
+module.exports = { validateAccountId, validateContractId, validateAssetCode, validateLimit, validateOrder };
 /**
  * Validates a Stellar asset defined by a code and issuer route parameter pair.
  *

@@ -6,6 +6,7 @@ registerParamValidation(router);
 const { server } = require("../config/stellar");
 const { StrKey } = require("@stellar/stellar-sdk");
 const { formatTransaction } = require("../utils/formatTransaction");
+const { normalizeAsset } = require("../utils/asset");
 
 /**
  * Error codes for SSE stream errors
@@ -277,7 +278,7 @@ router.get("/payments/:id", async (req, res, next) => {
           const payload = {
             type: op.type,
             amount: op.amount || op.starting_balance || null,
-            assetCode: op.asset_type === "native" ? "XLM" : (op.asset_code || null),
+            asset: normalizeAsset(op.asset_code, op.asset_issuer, op.asset_type),
             from: op.from || op.funder || op.source_account || null,
             to: op.to || op.account || null,
             timestamp: op.created_at || null,
@@ -308,6 +309,64 @@ router.get("/payments/:id", async (req, res, next) => {
   req.on("close", () => {
     clearInterval(heartbeatInterval);
     closeStream && closeStream();
+  });
+});
+
+/**
+ * GET /stream/ledgers
+ * Server-Sent Events endpoint that streams real-time live Stellar ledger updates.
+ */
+router.get("/ledgers", async (req, res, next) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+  });
+
+  // Send initial keep-alive comment line
+  res.write(": keep-alive\n\n");
+
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded || res.destroyed) {
+      clearInterval(heartbeat);
+      return;
+    }
+    res.write(": keep-alive\n\n");
+  }, 15000);
+
+  let closeHorizonStream;
+
+  try {
+    closeHorizonStream = server.ledgers().cursor("now").stream({
+      onmessage: (ledger) => {
+        if (res.writableEnded || res.destroyed) return;
+        res.write(`data: ${JSON.stringify({
+          sequence: ledger.sequence,
+          closedAt: ledger.closed_at,
+          baseFee: ledger.base_fee_in_stroops || ledger.base_fee,
+          transactionCount: ledger.successful_transaction_count,
+          operationCount: ledger.operation_count,
+        })}\n\n`);
+      },
+      onerror: (err) => {
+        clearInterval(heartbeat);
+        if (!res.writableEnded && !res.destroyed) res.end();
+        if (typeof closeHorizonStream === "function") {
+          closeHorizonStream();
+        }
+      }
+    });
+  } catch (err) {
+    clearInterval(heartbeat);
+    if (!res.writableEnded && !res.destroyed) res.end();
+    return;
+  }
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    if (typeof closeHorizonStream === "function") {
+      closeHorizonStream();
+    }
   });
 });
 

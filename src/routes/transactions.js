@@ -7,6 +7,7 @@ const { success, toISOTimestamp } = require("../utils/response");
 const { validateAccountId } = require("../utils/validators");
 const { parsePaginationParams } = require("../utils/pagination");
 const { makeAccountNotFoundError } = require("../utils/errors");
+const { normalizeAsset } = require("../utils/asset");
 
 function handleAccountNotFound(err, next, accountId) {
   if (err && err.response && err.response.status === 404) {
@@ -106,7 +107,7 @@ router.get("/:id", async (req, res, next) => {
       return {
         id: tx.id,
         hash: tx.hash,
-        ledger: tx.ledger,
+        ledger: typeof tx.ledger === "number" ? tx.ledger : tx.ledger_attr,
         createdAt: toISOTimestamp(tx.created_at),
         sourceAccount: tx.source_account,
         fee: {
@@ -117,10 +118,10 @@ router.get("/:id", async (req, res, next) => {
           account: tx.fee_account,
         },
         feeSummary: {
-          stroops: chargedInStroops,
-          xlm: (chargedInStroops / STROOPS_PER_XLM).toFixed(7),
-          perOperationStroops: perOpStroops,
-          perOperationXLM: (perOpStroops / STROOPS_PER_XLM).toFixed(7),
+          chargedInStroops: chargedInStroops,
+          chargedInXLM: (chargedInStroops / STROOPS_PER_XLM).toFixed(7),
+          perOperationInStroops: perOpStroops,
+          perOperationInXLM: (perOpStroops / STROOPS_PER_XLM).toFixed(7),
         },
         operationCount: tx.operation_count,
         memoType: tx.memo_type,
@@ -223,8 +224,11 @@ router.get("/:id/operations", async (req, res, next) => {
 
       // Add type-specific fields
       if (op.type === "payment") {
-        formatted.assetCode = op.asset_code || "XLM";
-        formatted.assetIssuer = op.asset_issuer || "native";
+        formatted.asset = normalizeAsset(
+          op.asset_code || "XLM",
+          op.asset_issuer || null,
+          op.asset_type || "native",
+        );
         formatted.amount = op.amount;
         formatted.from = op.from;
         formatted.to = op.to;
@@ -233,8 +237,7 @@ router.get("/:id/operations", async (req, res, next) => {
         formatted.funder = op.funder;
         formatted.account = op.account;
       } else if (op.type === "change_trust") {
-        formatted.assetCode = op.asset_code;
-        formatted.assetIssuer = op.asset_issuer;
+        formatted.asset = normalizeAsset(op.asset_code, op.asset_issuer, op.asset_type);
         formatted.trustor = op.trustor;
         formatted.trustee = op.trustee;
       }
@@ -282,7 +285,7 @@ router.post("/batch-status", async (req, res, next) => {
     }
 
     if (hashes.length === 0) {
-      return success(res, []);
+      return success(res, { items: [], total: 0 });
     }
 
     if (hashes.length > 20) {
@@ -310,7 +313,7 @@ router.post("/batch-status", async (req, res, next) => {
             hash: hash,
             found: true,
             successful: tx.successful,
-            ledger: tx.ledger,
+            ledger: typeof tx.ledger === "number" ? tx.ledger : tx.ledger_attr,
             createdAt: toISOTimestamp(tx.created_at),
             fee: tx.fee_charged,
           };
@@ -333,7 +336,7 @@ router.post("/batch-status", async (req, res, next) => {
       })
     );
 
-    return success(res, statusResults);
+    return success(res, { items: statusResults, total: statusResults.length });
   } catch (err) {
     next(err);
   }
