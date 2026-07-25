@@ -12,7 +12,10 @@ const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
 
 const { buildAccountAgeResponse } = require("../utils/accountAge");
-const { validateEffectType } = require("../utils/effectTypes");
+const cacheService = require("../services/cache");
+const cacheTTL = require("../config/cacheConfig");
+
+
 const axios = require("axios");
 const { Asset } = require("@stellar/stellar-sdk");
 const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
@@ -184,6 +187,20 @@ router.get("/:id/trustlines", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
+    const fresh = req.query.fresh === "true";
+    const { assetCode } = req.query;
+    const cacheKey = `trustlines:${id}`;
+
+    // Only read from cache for unfiltered requests; filtered results are subsets
+    // of the full list and must not be served from the full-list cache entry.
+    if (!fresh && !assetCode) {
+      const cached = cacheService.get(cacheKey);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
     const account = await server.loadAccount(id);
 
     const issuerCache = new Map();
@@ -199,7 +216,6 @@ router.get("/:id/trustlines", async (req, res, next) => {
       ),
     );
 
-    const { assetCode } = req.query;
     if (assetCode) {
       const filterLower = assetCode.toLowerCase();
       trustlines = trustlines.filter(
@@ -217,7 +233,15 @@ router.get("/:id/trustlines", async (req, res, next) => {
       total: trustlines.length,
       limit: null,
       cursor: null,
-    });
+    };
+
+    // Only cache unfiltered results (assetCode filter produces a subset)
+    if (!assetCode) {
+      cacheService.set(cacheKey, data, cacheTTL.trustlines);
+    }
+
+    res.set("X-Cache", "MISS");
+    return success(res, data);
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
