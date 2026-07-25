@@ -18,7 +18,16 @@ jest.mock("../src/config/stellar", () => {
 });
 
 // Mock axios for stellar.toml fetching
-jest.mock("axios");
+jest.mock("axios", () => ({
+    create: jest.fn(() => ({
+        interceptors: {
+            response: {
+                use: jest.fn(),
+            },
+        },
+    })),
+    get: jest.fn(),
+}));
 const axios = require("axios");
 
 describe("DEX and Asset Endpoints Test Suite", () => {
@@ -110,8 +119,9 @@ describe("DEX and Asset Endpoints Test Suite", () => {
 
             expect(res.statusCode).toBe(404);
             expect(res.body.success).toBe(false);
-            expect(res.body.error.type).toBe("NotFound");
-            expect(res.body.error.message).toContain("No order book exists");
+            expect(res.body.error.type).toBe("OrderBookEmpty");
+            expect(res.body.error.message).toContain("No active order book found for XLM/USDC");
+            expect(res.body.error.suggestion).toContain("active offers");
         });
 
         it("should handle order book with only bids", async () => {

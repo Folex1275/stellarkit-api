@@ -5,17 +5,39 @@ registerParamValidation(router);
 const { Asset } = require("@stellar/stellar-sdk");
 const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
-const { validateAssetCode, validateAccountId, validateAsset } = require("../utils/validators");
+const { validateAssetCode, validateAccountId, validateAsset, validateLimit } = require("../utils/validators");
 const { parseStellarAsset } = require("../utils/asset");
 const cacheService = require("../services/cache");
 const cacheTTL = require("../config/cacheConfig");
 
 /**
- * GET /dex/arbitrage/:assetCode/:assetIssuer
- * Checks for circular paths back to the same asset to find arbitrage opportunities.
- *
+ * @route GET /dex/arbitrage/:assetCode/:assetIssuer
+ * @desc Finds circular strict-receive paths that start and end in the same asset and flags potentially profitable loops.
+ * @param {import("express").Request} req - Express request object.
+ * @param {string} req.params.assetCode - Asset code to evaluate (for example `FUSD`, `XLM`).
+ * @param {string} req.params.assetIssuer - Issuer public key for credit assets, or `native` when `assetCode` is `XLM`.
+ * @param {import("express").Response} res - Express response object.
+ * @param {import("express").NextFunction} next - Express next middleware function.
+ * @returns {Promise<void>} JSON payload containing `pathsFound` and a normalized list of arbitrage path candidates.
  * @example
- * GET /dex/arbitrage/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+ * curl -s "http://localhost:3000/dex/arbitrage/FUSD/GBFUSDFICTIONALISSUERKEY000000000000000000000000000000" | jq
+ * // {
+ * //   "success": true,
+ * //   "data": {
+ * //     "pathsFound": true,
+ * //     "paths": [
+ * //       {
+ * //         "sourceAmount": "9.9200000",
+ * //         "destinationAmount": "10.0000000",
+ * //         "path": [
+ * //           { "assetCode": "NOVA", "assetIssuer": "GBNOVAISSUERFICTIONALKEY0000000000000000000000000000", "assetType": "credit_alphanum4" },
+ * //           { "assetCode": "XLM", "assetIssuer": "native", "assetType": "native" }
+ * //         ],
+ * //         "isProfitable": true
+ * //       }
+ * //     ]
+ * //   }
+ * // }
  */
 router.get("/arbitrage/:assetCode/:assetIssuer", async (req, res, next) => {
   try {
@@ -60,11 +82,28 @@ router.get("/arbitrage/:assetCode/:assetIssuer", async (req, res, next) => {
 });
 
 /**
- * GET /dex/spread/:sellAsset/:buyAsset
- * Calculates the bid-ask spread for a trading pair on the Stellar DEX.
- *
+ * @route GET /dex/spread/:sellAsset/:buyAsset
+ * @desc Computes best bid/ask, spread metrics, liquidity band, and depth totals for a Stellar DEX trading pair.
+ * @param {import("express").Request} req - Express request object.
+ * @param {string} req.params.sellAsset - Asset being sold in `CODE:ISSUER` format or `XLM:native`.
+ * @param {string} req.params.buyAsset - Asset being bought in `CODE:ISSUER` format or `XLM:native`.
+ * @param {import("express").Response} res - Express response object.
+ * @param {import("express").NextFunction} next - Express next middleware function.
+ * @returns {Promise<void>} JSON payload with `bestBid`, `bestAsk`, `spreadAbsolute`, `spreadPercent`, `midPrice`, and `orderBookDepth`.
  * @example
- * GET /dex/spread/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+ * curl -s "http://localhost:3000/dex/spread/XLM:native/NOVA:GBNOVAISSUERFICTIONALKEY0000000000000000000000000000" | jq
+ * // {
+ * //   "success": true,
+ * //   "data": {
+ * //     "bestBid": { "price": "0.1284000", "amount": "4200.0000000" },
+ * //     "bestAsk": { "price": "0.1291000", "amount": "3800.0000000" },
+ * //     "spreadAbsolute": "0.0007000",
+ * //     "spreadPercent": "0.5438",
+ * //     "midPrice": "0.1287500",
+ * //     "liquidity": "medium",
+ * //     "orderBookDepth": { "bids": 37, "asks": 41, "totalVolume": "12540.0000000" }
+ * //   }
+ * // }
  */
 router.get("/spread/:sellAsset/:buyAsset", async (req, res, next) => {
   try {
@@ -95,10 +134,7 @@ router.get("/spread/:sellAsset/:buyAsset", async (req, res, next) => {
     if (bids.length === 0 && asks.length === 0) {
       return res.status(404).json({
         success: false,
-        error: {
-          type: "NotFound",
-          message: "No order book exists for this trading pair.",
-        },
+        error: makeOrderBookEmptyError(selling.getCode(), buying.getCode()),
       });
     }
 
@@ -164,10 +200,7 @@ router.get("/spread/:sellAsset/:buyAsset", async (req, res, next) => {
     if (err.response && err.response.status === 404) {
       return res.status(404).json({
         success: false,
-        error: {
-          type: "NotFound",
-          message: "No order book exists for this trading pair.",
-        },
+        error: makeOrderBookEmptyError(req.params.sellAsset, req.params.buyAsset),
       });
     }
     next(err);
@@ -175,11 +208,26 @@ router.get("/spread/:sellAsset/:buyAsset", async (req, res, next) => {
 });
 
 /**
- * GET /dex/imbalance/:sellAsset/:buyAsset
- * Detects significant imbalances between buy and sell pressure on a Stellar DEX trading pair.
- *
+ * @route GET /dex/imbalance/:sellAsset/:buyAsset
+ * @desc Measures buy-vs-sell pressure by comparing aggregate bid and ask volume for a market pair.
+ * @param {import("express").Request} req - Express request object.
+ * @param {string} req.params.sellAsset - Base/sell asset in `CODE:ISSUER` format or `XLM:native`.
+ * @param {string} req.params.buyAsset - Quote/buy asset in `CODE:ISSUER` format or `XLM:native`.
+ * @param {import("express").Response} res - Express response object.
+ * @param {import("express").NextFunction} next - Express next middleware function.
+ * @returns {Promise<void>} JSON payload with `bidVolume`, `askVolume`, `imbalanceRatio`, `pressure`, and a human-readable `signal`.
  * @example
- * GET /dex/imbalance/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+ * curl -s "http://localhost:3000/dex/imbalance/FUSD:GBFUSDFICTIONALISSUERKEY000000000000000000000000000000/XLM:native" | jq
+ * // {
+ * //   "success": true,
+ * //   "data": {
+ * //     "bidVolume": "18500.0000000",
+ * //     "askVolume": "11980.5000000",
+ * //     "imbalanceRatio": "1.5442",
+ * //     "pressure": "buy",
+ * //     "signal": "Strong buy pressure detected. Demand significantly outweighs supply."
+ * //   }
+ * // }
  */
 router.get("/imbalance/:sellAsset/:buyAsset", async (req, res, next) => {
   try {
@@ -207,10 +255,7 @@ router.get("/imbalance/:sellAsset/:buyAsset", async (req, res, next) => {
     if (bidVolume === 0 && askVolume === 0) {
       return res.status(404).json({
         success: false,
-        error: {
-          type: "NotFound",
-          message: "No order book exists for this trading pair.",
-        },
+        error: makeOrderBookEmptyError(selling.getCode(), buying.getCode()),
       });
     }
 
@@ -238,10 +283,7 @@ router.get("/imbalance/:sellAsset/:buyAsset", async (req, res, next) => {
     if (err.response && err.response.status === 404) {
       return res.status(404).json({
         success: false,
-        error: {
-          type: "NotFound",
-          message: "No order book exists for this trading pair.",
-        },
+        error: makeOrderBookEmptyError(req.params.sellAsset, req.params.buyAsset),
       });
     }
     next(err);
@@ -249,19 +291,28 @@ router.get("/imbalance/:sellAsset/:buyAsset", async (req, res, next) => {
 });
 
 /**
- * GET /dex/depth/:sellAsset/:buyAsset
- * Analyzes the full depth of a Stellar DEX order book for a trading pair.
- *
- * Returns a summary of bids and asks, total volumes, top 5 of each,
- * and a depth rating:
- * - "deep": total volume >= 50,000
- * - "moderate": total volume >= 5,000
- * - "shallow": total volume < 5,000
- *
- * Asset format: CODE:ISSUER or XLM:native
- *
+ * @route GET /dex/depth/:sellAsset/:buyAsset
+ * @desc Summarizes order book depth with side counts, cumulative volumes, top 5 bid/ask levels, and a depth rating.
+ * @param {import("express").Request} req - Express request object.
+ * @param {string} req.params.sellAsset - Asset to sell in `CODE:ISSUER` format or `XLM:native`.
+ * @param {string} req.params.buyAsset - Asset to buy in `CODE:ISSUER` format or `XLM:native`.
+ * @param {import("express").Response} res - Express response object.
+ * @param {import("express").NextFunction} next - Express next middleware function.
+ * @returns {Promise<void>} JSON payload containing `bidsCount`, `asksCount`, volume totals, top levels, and `depthRating` (`deep`, `moderate`, `shallow`).
  * @example
- * GET /dex/depth/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN
+ * curl -s "http://localhost:3000/dex/depth/NOVA:GBNOVAISSUERFICTIONALKEY0000000000000000000000000000/FUSD:GBFUSDFICTIONALISSUERKEY000000000000000000000000000000" | jq
+ * // {
+ * //   "success": true,
+ * //   "data": {
+ * //     "bidsCount": 64,
+ * //     "asksCount": 59,
+ * //     "totalBidVolume": "72450.1200000",
+ * //     "totalAskVolume": "69110.0000000",
+ * //     "top5Bids": [{ "price": "0.9912000", "amount": "1200.0000000" }],
+ * //     "top5Asks": [{ "price": "0.9948000", "amount": "980.0000000" }],
+ * //     "depthRating": "deep"
+ * //   }
+ * // }
  */
 router.get("/depth/:sellAsset/:buyAsset", async (req, res, next) => {
   try {
@@ -310,10 +361,7 @@ router.get("/depth/:sellAsset/:buyAsset", async (req, res, next) => {
     if (bids.length === 0 && asks.length === 0) {
       return res.status(404).json({
         success: false,
-        error: {
-          type: "NotFound",
-          message: "No order book exists for this trading pair.",
-        },
+        error: makeOrderBookEmptyError(selling.getCode(), buying.getCode()),
       });
     }
 
@@ -348,10 +396,7 @@ router.get("/depth/:sellAsset/:buyAsset", async (req, res, next) => {
     if (err.response && err.response.status === 404) {
       return res.status(404).json({
         success: false,
-        error: {
-          type: "NotFound",
-          message: "No order book exists for this trading pair.",
-        },
+        error: makeOrderBookEmptyError(req.params.sellAsset, req.params.buyAsset),
       });
     }
     next(err);
@@ -359,15 +404,28 @@ router.get("/depth/:sellAsset/:buyAsset", async (req, res, next) => {
 });
 
 /**
- * GET /dex/price/:sellAsset/:buyAsset?amount=:amount
- * Calculates the effective exchange rate between two assets using the best
- * available payment path on the Stellar DEX.
- *
- * Asset format: CODE:ISSUER or XLM:native
- * amount query param: amount of sellAsset to convert (default: 1)
- *
+ * @route GET /dex/price/:sellAsset/:buyAsset
+ * @desc Estimates effective conversion rate using strict-send pathfinding for a given sell amount.
+ * @param {import("express").Request} req - Express request object.
+ * @param {string} req.params.sellAsset - Source asset in `CODE:ISSUER` format or `XLM:native`.
+ * @param {string} req.params.buyAsset - Destination asset in `CODE:ISSUER` format or `XLM:native`.
+ * @param {string} [req.query.amount=1] - Amount of `sellAsset` to convert.
+ * @param {import("express").Response} res - Express response object.
+ * @param {import("express").NextFunction} next - Express next middleware function.
+ * @returns {Promise<void>} JSON payload with normalized sell/buy amounts, computed `effectiveRate`, and the best hop path.
  * @example
- * GET /dex/price/XLM:native/USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN?amount=100
+ * curl -s "http://localhost:3000/dex/price/XLM:native/FUSD:GBFUSDFICTIONALISSUERKEY000000000000000000000000000000?amount=250" | jq
+ * // {
+ * //   "success": true,
+ * //   "data": {
+ * //     "sellAsset": "XLM:native",
+ * //     "buyAsset": "FUSD:GBFUSDFICTIONALISSUERKEY000000000000000000000000000000",
+ * //     "sellAmount": "250.0000000",
+ * //     "buyAmount": "31.8750000",
+ * //     "effectiveRate": "0.1275000",
+ * //     "bestPath": [{ "assetCode": "NOVA", "assetIssuer": "GBNOVAISSUERFICTIONALKEY0000000000000000000000000000" }]
+ * //   }
+ * // }
  */
 router.get("/price/:sellAsset/:buyAsset", async (req, res, next) => {
   try {
