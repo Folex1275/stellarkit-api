@@ -1,6 +1,18 @@
 const { StrKey } = require("@stellar/stellar-sdk");
 
 /**
+ * Format a query-parameter validation message.
+ * e.g. qp("order", 'must be "asc" or "desc".') → "Query param 'order' must be \"asc\" or \"desc\"."
+ *
+ * @param {string} param - Parameter name
+ * @param {string} msg   - Remainder of the message
+ * @returns {string}
+ */
+function qp(param, msg) {
+  return `Query param '${param}' ${msg}`;
+}
+
+/**
  * Create a structured validation error for invalid input.
  *
  * @param {string} message - Human-readable error message.

@@ -121,6 +121,19 @@ function errorHandler(err, req, res, next) {
     });
   }
 
+  // TransactionNotFound errors (Horizon 404 on transaction lookup)
+  if (err.isTransactionNotFound) {
+    logError(404, req, err.message);
+    return res.status(404).json({
+      success: false,
+      error: {
+        type: "NotFound",
+        message: err.message,
+        suggestion: "Verify the transaction hash is correct and exists on the network.",
+      },
+    });
+  }
+
   // AccountNotFound errors (Horizon 404 on account lookup)
   if (err.isAccountNotFound) {
     logError(404, req, err.message);

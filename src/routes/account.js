@@ -2,13 +2,11 @@ const express = require("express");
 const router = express.Router();
 const { server, NETWORK, fetchAccountCreation } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
-const { makeAccountNotFoundError } = require("../utils/errors");
-const cacheService = require("../services/cache");
-
 const {
   makeAccountNotFoundError,
   makeClaimableBalanceNotFoundError,
 } = require("../utils/errors");
+const cacheService = require("../services/cache");
 const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 const registerParamValidation = require("../middleware/validateRouteParams");
@@ -342,8 +340,6 @@ router.get("/:id/payments", async (req, res, next) => {
 
     const paymentResponse = await query.call();
     const rawRecords = paymentResponse.records || [];
-    const opResponse = await query.call();
-    const rawRecords = opResponse.records || [];
 
     const issuerCache = new Map();
     const tomlCache = new Map();
