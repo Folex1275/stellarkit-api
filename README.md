@@ -179,7 +179,15 @@ Soroban is Stellar’s smart contract platform for running WebAssembly (WASM) co
 
 A Soroban contract is referenced by a **contract ID**, which is the address used to invoke the contract after it has been deployed. The contract’s **WASM hash** is the digest of the compiled contract binary and uniquely identifies the contract code that is stored and executed on the network.
 
-StellarKit API currently supports Soroban contract inspection through the `/soroban/contract/:id` endpoint. This endpoint enables developers to look up contract details by contract ID, including the associated WASM hash and contract metadata, making it easier to combine traditional Stellar account workflows with Soroban contract interactions.
+StellarKit API supports Soroban contract inspection through two endpoints: `GET /soroban/contract/:id` looks up contract details by contract ID, including the associated WASM hash and ledger metadata, and `GET /soroban/contract/:id/storage` returns the contract's instance-storage entries. Together they make it easier to combine traditional Stellar account workflows with Soroban contract interactions.
+
+See [docs/soroban.md](docs/soroban.md) for a full walkthrough with curl examples and sample responses.
+
+---
+
+## Documentation
+
+- [docs/soroban.md](docs/soroban.md) — Soroban contract endpoints: what Soroban is, how contract IDs work, and how to inspect deployed contracts via `/soroban/contract/:id` and `/soroban/contract/:id/storage`.
 
 ---
 
@@ -245,10 +253,12 @@ Visit `http://localhost:3000` after startup.
 | ----------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | `STELLAR_NETWORK` | `testnet`                          | Target Stellar network. Accepted values: `testnet` or `mainnet`. Controls which Horizon server is used and gates testnet-only endpoints such as Friendbot.        | ⬜ No    |
 | `HORIZON_URL`     | _(derived from `STELLAR_NETWORK`)_ | Override the Horizon server URL. When omitted, defaults to `https://horizon-testnet.stellar.org` for `testnet` and `https://horizon.stellar.org` for `mainnet`.   | ⬜ No    |
+| `SOROBAN_RPC_URL` | _(testnet only)_                   | Soroban RPC server URL used by the `/soroban/*` endpoints. Defaults to `https://soroban-testnet.stellar.org` on testnet. No default on mainnet — must be set to use `/soroban/*` there. | ⬜ No    |
 | `PORT`            | `3000`                             | TCP port the Express server listens on.                                                                                                                           | ⬜ No    |
 | `NODE_ENV`        | `development`                      | Runtime environment. Set to `production` to enable combined HTTP logging and sanitised error messages. Set to `test` to suppress console output during test runs. | ⬜ No    |
 | `RATE_LIMIT_MAX`  | `100`                              | Maximum number of requests allowed per IP address per 15-minute window. Applies to the global rate limiter.                                                       | ⬜ No    |
 | `CACHE_TTL_MS`    | `5000`                             | Cache time-to-live in milliseconds for the `/network-status` and `/fee-estimate` endpoints.                                                                       | ⬜ No    |
+| `CACHE_TTL_CONTRACT_STORAGE_MS` | `15000`               | Cache time-to-live in milliseconds for the `/soroban/contract/:id/storage` endpoint.                                                                              | ⬜ No    |
 | `REQUIRE_API_KEY` | `false`                            | Enables API key authentication. When true, clients must provide a valid API key via X-API-Key header.                                                             | ⬜ No    |
 | `API_KEYS`        | _(empty)_                          | Comma-separated list of valid API keys. Required when REQUIRE_API_KEY=true.                                                                                       | ⬜ No    |
 
