@@ -1145,6 +1145,30 @@ router.get("/:id/sponsorship", async (req, res, next) => {
       accountsSponsoring,
       count: sponsoredEntries.length,
     });
+  }
+
+  return entries;
+}
+
+/**
+ * GET /account/:id/sponsorships
+ */
+router.get("/:id/sponsorships", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const [account, sponsoringResponse] = await Promise.all([
+      server.loadAccount(id),
+      server.accounts().sponsor(id).call(),
+    ]);
+
+    const sponsoredBy = buildSponsoredByEntries(account);
+    const sponsoring = (sponsoringResponse.records || []).flatMap((sponsoredAccount) =>
+      buildSponsoringEntries(sponsoredAccount, id),
+    );
+
+    return success(res, { sponsoring, sponsoredBy });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -1700,6 +1724,68 @@ router.get("/:id/pool-positions", async (req, res, next) => {
       limit: null,
       cursor: null,
     });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/liquidity-pool-shares
+ */
+router.get("/:id/liquidity-pool-shares", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+
+    const poolShareTrustlines = (account.balances || []).filter(
+      (balance) => balance.asset_type === "liquidity_pool_shares",
+    );
+
+    if (poolShareTrustlines.length === 0) {
+      return success(res, { shares: [], total: 0 });
+    }
+
+    const poolDetailsPromises = poolShareTrustlines.map((trustline) =>
+      server
+        .liquidityPools()
+        .liquidityPoolId(trustline.liquidity_pool_id)
+        .call()
+        .catch((err) => {
+          if (err && err.response && err.response.status === 404) return null;
+          throw err;
+        }),
+    );
+
+    const poolDetails = await Promise.all(poolDetailsPromises);
+
+    const shares = [];
+
+    for (let i = 0; i < poolShareTrustlines.length; i++) {
+      const trustline = poolShareTrustlines[i];
+      const pool = poolDetails[i];
+      if (!pool) continue;
+
+      const reserveA = pool.reserves[0];
+      const reserveB = pool.reserves[1];
+
+      shares.push({
+        poolId: pool.id,
+        shares: parseFloat(trustline.balance).toFixed(7),
+        totalPoolShares: parseFloat(pool.total_shares).toFixed(7),
+        reserveA: {
+          asset: reserveA.asset,
+          amount: parseFloat(reserveA.amount).toFixed(7),
+        },
+        reserveB: {
+          asset: reserveB.asset,
+          amount: parseFloat(reserveB.amount).toFixed(7),
+        },
+      });
+    }
+
+    return success(res, { shares, total: shares.length });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
