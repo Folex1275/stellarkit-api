@@ -5,6 +5,11 @@ import type {
   AccountSignersResponse,
   AccountAgeResponse,
   AccountRiskScoreResponse,
+  AccountTransactionCountResponse,
+} from "../types/index.d";
+
+/** Transaction count summary returned by `AccountModule.getTransactionCount`. */
+export type TransactionCount = AccountTransactionCountResponse["data"];
   TrustlineEntry,
   PaymentOperation,
   Signer,
@@ -256,6 +261,20 @@ export class AccountModule {
   }
 
   /**
+   * Get the total transaction count for an account, plus the timestamps of
+   * its first and last transactions — a lightweight summary that avoids
+   * paginating through the full transaction history.
+   *
+   * @param id - Stellar account public key.
+   * @returns Resolves to `{ count, firstTransactionAt, lastTransactionAt }`.
+   * @throws {StellarKitError} On non-2xx response (e.g. 404 account not found).
+   *
+   * @example
+   * const { count, firstTransactionAt } = await account.getTransactionCount("GAAZI4...");
+   * console.log(`${count} transactions since ${firstTransactionAt}`);
+   */
+  async getTransactionCount(id: string): Promise<TransactionCount> {
+    return this._get<TransactionCount>(`/account/${id}/transaction-count`);
    * Get full account data including balances, signers, and all metadata.
    *
    * Alias for getAccount — returns complete account information.

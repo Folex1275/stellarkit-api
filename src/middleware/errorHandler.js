@@ -67,6 +67,22 @@ function errorHandler(err, req, res, next) {
     const horizonError = err.response.data;
     const extras = horizonError.extras !== undefined ? horizonError.extras : null;
 
+    const resultCode = pickMostSpecificResultCode(horizonError?.extras?.result_codes);
+
+    const mappedStatus = mapHorizonErrorToStatus(resultCode);
+    const status = mappedStatus ?? err.response.status ?? 400;
+
+    if (isTransactionSubmissionFailure(horizonError)) {
+      const body = buildTransactionSubmissionFailedError(horizonError);
+      logError(status, req, body.message);
+      return res.status(status).json({ success: false, error: body });
+    }
+
+    const message = horizonError.detail || horizonError.title || "Horizon Error";
+    const code = resultCode;
+    const humanMessage = code ? translateHorizonError(code) : null;
+    logError(status, req, message);
+    return res.status(status).json({
     let resultCode = null;
     if (extras && extras.result_codes) {
       if (typeof extras.result_codes.transaction === "string") {
@@ -210,6 +226,19 @@ function errorHandler(err, req, res, next) {
         type: "InvalidAsset",
         message: err.message,
         suggestion: err.suggestion || null,
+      },
+    });
+  }
+
+  // InvalidLimit errors — thrown by validateLimit()
+  if (err.isInvalidLimit) {
+    logError(400, req, err.message);
+    return res.status(400).json({
+      success: false,
+      error: {
+        type: "InvalidLimit",
+        message: "limit must be a number between 1 and 100.",
+        suggestion: "Provide a valid integer for the limit parameter, e.g. ?limit=20",
       },
     });
   }
