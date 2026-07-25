@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const { server, NETWORK, fetchAccountCreation } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
-const { makeAccountNotFoundError } = require("../utils/errors");
 const cacheService = require("../services/cache");
 const { validateAccountId, validateAssetCode, validateLimit } = require("../utils/validators");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
@@ -241,6 +240,76 @@ router.get("/:id/payments", async (req, res, next) => {
 
     const paymentResponse = await query.call();
     const rawRecords = paymentResponse.records || [];
+
+    const issuerCache = new Map();
+    const tomlCache = new Map();
+
+    const paymentOps = [];
+    for (const op of rawRecords) {
+      if (op.type === "payment" || op.type === "create_account") {
+        const isPayment = op.type === "payment";
+        const assetCode = isPayment ? op.asset_code || "XLM" : "XLM";
+        const assetIssuer = isPayment ? op.asset_issuer || null : null;
+
+        // Apply assetCode filter (case-insensitive, already uppercased above)
+        if (filterCode && assetCode.toUpperCase() !== filterCode) return;
+
+        // Apply assetIssuer filter only when both params are provided
+        if (filterCode && filterIssuer && assetIssuer !== filterIssuer) return;
+        const assetType = isPayment ? op.asset_type || "native" : "native";
+
+        let assetDetail = {
+          code: assetCode,
+          issuer: assetIssuer,
+          type: assetType,
+        };
+
+        if (assetType !== "native" && assetIssuer) {
+          if (!issuerCache.has(assetIssuer)) {
+            issuerCache.set(
+              assetIssuer,
+              server
+                .loadAccount(assetIssuer)
+                .then((a) => a.home_domain || null)
+                .catch(() => null),
+            );
+          }
+
+          const homeDomain = await issuerCache.get(assetIssuer);
+
+          if (homeDomain) {
+            if (!tomlCache.has(homeDomain)) {
+              tomlCache.set(homeDomain, homeDomain);
+            }
+            try {
+              const toml = await getAssetMetadataFromToml(
+                homeDomain,
+                assetCode,
+              );
+              if (toml) {
+                assetDetail = { ...assetDetail, toml };
+              }
+            } catch (_) {
+              // TOML resolution failed, keep basic asset detail
+            }
+          }
+        }
+
+        paymentOps.push({
+          type: op.type,
+          amount: isPayment ? op.amount : op.starting_balance,
+          asset: {
+            code: assetCode,
+            issuer: assetIssuer,
+            type: isPayment ? op.asset_type || "native" : "native",
+          },
+          asset: assetDetail,
+          sender: isPayment ? op.from : op.funder,
+          receiver: isPayment ? op.to : op.account,
+          createdAt: toISOTimestamp(op.created_at),
+        });
+      }
+    }
 
     const payments = rawRecords.map((op) => {
       const isPayment = op.type === "payment";
@@ -526,7 +595,8 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
-    const cacheKey = `claimable-balances:${id}`;
+    const includeExpired = req.query.includeExpired === "true";
+    const cacheKey = `claimable-balances:${id}:${includeExpired}`;
     const fresh = req.query.fresh === "true";
 
     if (!fresh) {
@@ -617,6 +687,8 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
 
       const evaluation = evaluatePredicate(claimant.predicate);
 
+      const isExpired = evaluation.reason.includes("Deadline passed");
+
       const balanceEntry = {
         id: balance.id,
         asset: balance.asset,
@@ -625,14 +697,15 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
         lastModifiedLedger: balance.last_modified_ledger,
         predicate: claimant.predicate,
         claimability: evaluation.reason,
+        isExpired,
       };
 
       if (evaluation.canClaim) {
         claimable.push(balanceEntry);
+      } else if (isExpired) {
+        if (includeExpired) expired.push(balanceEntry);
       } else if (evaluation.reason.includes("Not yet started")) {
         notYetClaimable.push(balanceEntry);
-      } else if (evaluation.reason.includes("Deadline passed")) {
-        expired.push(balanceEntry);
       } else {
         notYetClaimable.push(balanceEntry);
       }
@@ -1730,9 +1803,13 @@ router.get("/:id/pool-positions", async (req, res, next) => {
 });
 
 /**
- * GET /account/:id/liquidity-pool-shares
+ * GET /account/:id/transaction-count?since=<ISO8601>
+ * Counts transactions for an account. Without `since`, paginates through the
+ * account's entire transaction history to produce an exact count. With `since`,
+ * walks records newest-first and stops as soon as a transaction older than the
+ * cutoff is reached, avoiding a full history scan.
  */
-router.get("/:id/liquidity-pool-shares", async (req, res, next) => {
+router.get("/:id/transaction-count", async (req, res, next) => {
   try {
     const { id } = req.params;
     validateAccountId(id);
