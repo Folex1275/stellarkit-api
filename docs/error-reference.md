@@ -217,28 +217,21 @@ Returned when API key authentication is enabled and the request is missing or ha
 {
   "success": false,
   "error": {
-    "type": "Unauthorized",
-    "message": "Missing API key. Please provide X-API-Key header."
+    "type": "HorizonError",
+    "title": "Transaction Failed",
+    "detail": "The transaction failed when submitted to the Stellar network.",
+    "status": 400,
+    "extras": { "result_codes": { "transaction": "tx_failed" } },
+    "code": "tx_failed",
+    "message": "tx_failed"
   }
 }
 ```
 
-**Common causes:**
-- `X-API-Key` header is missing
-- The provided key does not match any configured key
-- API key authentication is enabled but no keys are configured
+### ServerError
+**HTTP status:** `500` (or another 5xx status when set upstream)
 
-**Suggested fix:** Include a valid API key in the `X-API-Key` request header. Contact the API administrator if you need a key.
-
----
-
-## ServerError
-
-Returned for unexpected internal errors that do not match any specific error type.
-
-**Status:** `500`
-
-**Example:**
+Returned for unexpected errors not covered by another error type. In production, the message is generic (`"An unexpected error occurred."`) to avoid leaking internals; the full message is included outside of production.
 
 ```json
 {
