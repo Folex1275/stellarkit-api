@@ -3,7 +3,7 @@ const router = express.Router();
 const { server, NETWORK, fetchAccountCreation } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
 const cacheService = require("../services/cache");
-const { validateAccountId, validateAssetCode, validateLimit } = require("../utils/validators");
+const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
@@ -22,6 +22,72 @@ const cacheTTL = require("../config/cacheConfig");
 
 // Cache TTL for account endpoint responses (in seconds)
 const CACHE_TTL_ACCOUNT = parseInt(process.env.CACHE_TTL_ACCOUNT_MS, 10) / 1000 || 10;
+
+function validateLimit(limit, max = 200) {
+  const n = Number(limit);
+  if (!Number.isInteger(n) || n <= 0 || n > max) {
+    const err = new Error(`limit must be between 1 and ${max}`);
+    err.status = 400;
+    err.field = "limit";
+    err.receivedValue = String(limit);
+    throw err;
+  }
+  return n;
+}
+
+function normalizeSignerType(type) {
+  const normalized = String(type || "").toLowerCase();
+
+  if (
+    normalized === "ed25519_public_key" ||
+    normalized === "ed25519" ||
+    normalized === "signer_key_type_ed25519"
+  ) {
+    return "ed25519_public_key";
+  }
+
+  if (
+    normalized === "sha256_hash" ||
+    normalized === "hash_x" ||
+    normalized === "signer_key_type_hash_x"
+  ) {
+    return "hash_x";
+  }
+
+  if (
+    normalized === "preauth_tx" ||
+    normalized === "pre_auth_tx" ||
+    normalized === "signer_key_type_pre_auth_tx"
+  ) {
+    return "pre_auth_tx";
+  }
+
+  return type || "unknown";
+}
+
+function normalizeSigningKeysResponse(account) {
+  const signers = (account.signers || []).map((signer) => ({
+    key: signer.key,
+    weight: Number(signer.weight) || 0,
+    type: normalizeSignerType(signer.type),
+    sponsoredBy: signer.sponsor || signer.sponsored_by || null,
+  }));
+
+  const masterSigner = signers.find(
+    (signer) =>
+      signer.key === account.id && signer.type === "ed25519_public_key",
+  );
+
+  return {
+    signers,
+    masterWeight: masterSigner ? masterSigner.weight : 0,
+    thresholds: {
+      lowThreshold: account.thresholds?.low_threshold ?? 0,
+      medThreshold: account.thresholds?.med_threshold ?? 0,
+      highThreshold: account.thresholds?.high_threshold ?? 0,
+    },
+  };
+}
 
 function handleAccountNotFound(err, next, accountId) {
   if (err && err.response && err.response.status === 404) {
@@ -217,6 +283,101 @@ router.get("/:id/sequence", async (req, res, next) => {
     });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/signing-keys
+ */
+router.get("/:id/signing-keys", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+    return success(res, normalizeSigningKeysResponse(account));
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/effects
+ */
+router.get("/:id/effects", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const { limit, cursor } = parsePaginationParams(req.query, 200);
+
+    // Ensure account exists for proper 404s
+    await server.loadAccount(id);
+
+    let query = server.effects().forAccount(id).limit(limit).order("desc");
+    if (cursor) query = query.cursor(cursor);
+
+    const effectsResponse = await query.call();
+    const records = effectsResponse.records || [];
+
+    const effects = records.map((eff) => {
+      const effectId = eff.id || eff.effect_id || null;
+      const type = eff.type;
+      const createdAt = toISOTimestamp(eff.created_at);
+
+      // Type specific fields (best-effort normalization)
+      const asset = (() => {
+        if (eff.asset_type === "native")
+          return { code: "XLM", issuer: null, type: "native" };
+        if (eff.asset_type)
+          return {
+            code: eff.asset_code || null,
+            issuer: eff.asset_issuer || null,
+            type: eff.asset_type,
+          };
+        return null;
+      })();
+
+      const amount =
+        eff.amount !== undefined
+          ? eff.amount
+          : eff.starting_balance !== undefined
+            ? eff.starting_balance
+            : null;
+
+      return {
+        effectId,
+        type,
+        createdAt,
+        ...(asset ? { asset } : {}),
+        ...(amount !== null ? { amount } : {}),
+        // passthrough common Horizon fields when present
+        ...(eff.account !== undefined ? { account: eff.account } : {}),
+        ...(eff.type ? {} : {}),
+        ...(eff.details !== undefined ? { details: eff.details } : {}),
+        ...(eff.paging_token ? { pagingToken: eff.paging_token } : {}),
+        // Provide a normalized cursor for internal debugging/consistency
+        ...(eff.paging_token ? { nextPagingToken: eff.paging_token } : {}),
+      };
+    });
+
+    const nextCursor =
+      records.length > 0
+        ? records[records.length - 1].paging_token || null
+        : null;
+
+    return success(res, {
+      effects,
+      total: effects.length,
+      limit,
+      cursor: effects.length ? nextCursor : null,
+    });
+  } catch (err) {
+    if (err && err.response && err.response.status === 404) {
+      return next(makeAccountNotFoundError(req.params.id, NETWORK));
+    }
+    if (err && err.isAccountNotFound) return next(err);
+    next(err);
   }
 });
 

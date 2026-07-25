@@ -12,6 +12,7 @@ import type {
 export type TransactionCount = AccountTransactionCountResponse["data"];
   TrustlineEntry,
   PaymentOperation,
+  Signer,
 } from "../types/index.d";
 
 /** Paginated response returned by list endpoints. */
@@ -47,6 +48,22 @@ export interface NativeBalance {
   buyingLiabilities: string;
   /** XLM reserved for selling liabilities. */
   sellingLiabilities: string;
+}
+
+/**
+ * Signing key configuration returned by GET /account/:id/signing-keys.
+ */
+export interface SigningKeys {
+  /** Account signer entries including normalized type and sponsorship metadata. */
+  signers: Array<Signer & { sponsoredBy: string | null }>;
+  /** Weight of the account master key signer. */
+  masterWeight: number;
+  /** Current account thresholds for low/medium/high operations (camelCase). */
+  thresholds: {
+    lowThreshold: number;
+    medThreshold: number;
+    highThreshold: number;
+  };
 }
 
 /**
@@ -197,6 +214,28 @@ export class AccountModule {
   async getSigners(id: string): Promise<AccountSignersResponse["data"]> {
     const account = await this._get<AccountResponse["data"]>(`/account/${id}`);
     return { accountId: account.accountId, signers: account.signers, thresholds: account.thresholds };
+  }
+
+  /**
+   * Get account signing key configuration.
+   *
+   * Calls `GET /account/:id/signing-keys` and returns account signers,
+   * master key weight, and operation thresholds.
+   *
+   * @param id - Stellar account public key (non-empty string).
+   * @returns Resolves to account signing key configuration.
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response.
+   *
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const signingKeys = await account.getSigningKeys("GAAZI4...");
+   * console.log(signingKeys.masterWeight);
+   */
+  async getSigningKeys(id: string): Promise<SigningKeys> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
+    return this._get<SigningKeys>(`/account/${id}/signing-keys`);
   }
 
   /**

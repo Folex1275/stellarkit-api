@@ -249,6 +249,94 @@ describe("ErrorHandler Middleware", () => {
       expect(body.error.detail).toBe("An error occurred with the Stellar network.");
       expect(body.error.extras).toBeNull();
     });
+
+    describe("Account merge specific failures", () => {
+      beforeEach(() => {
+        req.path = "/account/GABC123456789012345678901234567890123456789012345678901234/merge";
+      });
+
+      it("returns AccountMergeFailed for op_does_not_exist", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Merge operation failed.",
+              extras: { result_codes: { operations: ["op_does_not_exist"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message: "Account merge failed because the destination account does not exist.",
+            resultCode: "op_does_not_exist",
+            suggestion:
+              "Use an existing funded destination account (G...) before retrying the merge.",
+          },
+        });
+      });
+
+      it("returns AccountMergeFailed for op_malformed", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Malformed operation.",
+              extras: { result_codes: { operations: ["op_malformed"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message: "Account merge failed because the operation payload is malformed.",
+            resultCode: "op_malformed",
+            suggestion:
+              "Check source/destination values and rebuild the transaction with a valid accountMerge operation.",
+          },
+        });
+      });
+
+      it("returns AccountMergeFailed for op_dest_full", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Destination full.",
+              extras: { result_codes: { operations: ["op_dest_full"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message:
+              "Account merge failed because the destination account cannot accept additional reserves or entries.",
+            resultCode: "op_dest_full",
+            suggestion:
+              "Free capacity on the destination account (remove subentries or use a different destination) and try again.",
+          },
+        });
+      });
+    });
   });
 
   describe("Horizon Timeout Errors", () => {

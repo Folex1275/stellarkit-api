@@ -38,51 +38,27 @@ function logError(status, req, message) {
   }
 }
 
-/**
- * A Horizon error is specifically a failed transaction submission (as opposed
- * to any other Horizon error, e.g. a 404 on an account/asset lookup) when it
- * carries the "Transaction Failed" problem type along with result codes.
- */
-function isTransactionSubmissionFailure(horizonError) {
-  return Boolean(
-    horizonError &&
-      horizonError.title === "Transaction Failed" &&
-      horizonError.extras &&
-      horizonError.extras.result_codes
-  );
-}
+const ACCOUNT_MERGE_FAILURES = {
+  op_does_not_exist: {
+    message: "Account merge failed because the destination account does not exist.",
+    suggestion:
+      "Use an existing funded destination account (G...) before retrying the merge.",
+  },
+  op_malformed: {
+    message: "Account merge failed because the operation payload is malformed.",
+    suggestion:
+      "Check source/destination values and rebuild the transaction with a valid accountMerge operation.",
+  },
+  op_dest_full: {
+    message: "Account merge failed because the destination account cannot accept additional reserves or entries.",
+    suggestion:
+      "Free capacity on the destination account (remove subentries or use a different destination) and try again.",
+  },
+};
 
-/**
- * Picks the most specific result code out of a Horizon result_codes object.
- * Horizon sets `transaction: "tx_failed"` as a generic wrapper whenever an
- * operation is what actually failed, so the specific operation code (if any)
- * is preferred over that generic marker.
- */
-function pickMostSpecificResultCode(resultCodes) {
-  if (!resultCodes) return null;
-  if (resultCodes.transaction && resultCodes.transaction !== "tx_failed") {
-    return resultCodes.transaction;
-  }
-  const opCode = (resultCodes.operations || []).find((code) => code && code !== "op_success");
-  return opCode || resultCodes.transaction || null;
-}
-
-function buildTransactionSubmissionFailedError(horizonError) {
-  const resultCodes = horizonError.extras.result_codes;
-  const suggestionCode = pickMostSpecificResultCode(resultCodes);
-  const suggestion =
-    (suggestionCode && translateHorizonError(suggestionCode)) ||
-    "Review the transaction result codes and adjust the transaction before resubmitting.";
-
-  return {
-    type: "TransactionSubmissionFailed",
-    message: "Transaction failed.",
-    resultCodes: {
-      transaction: resultCodes.transaction || null,
-      operations: resultCodes.operations || [],
-    },
-    suggestion,
-  };
+function isMergePath(pathname) {
+  if (!pathname || typeof pathname !== "string") return false;
+  return pathname.toLowerCase().includes("merge");
 }
 
 function errorHandler(err, req, res, next) {
@@ -117,6 +93,20 @@ function errorHandler(err, req, res, next) {
       ) {
         resultCode = extras.result_codes.operations[0];
       }
+    }
+
+    const mergeFailure = resultCode ? ACCOUNT_MERGE_FAILURES[resultCode] : null;
+    if (mergeFailure && isMergePath(req.path)) {
+      logError(400, req, mergeFailure.message);
+      return res.status(400).json({
+        success: false,
+        error: {
+          type: "AccountMergeFailed",
+          message: mergeFailure.message,
+          resultCode,
+          suggestion: mergeFailure.suggestion,
+        },
+      });
     }
 
     const mappedStatus = mapHorizonErrorToStatus(resultCode);
