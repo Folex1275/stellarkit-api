@@ -6,6 +6,11 @@
 - [x] Step 3: Add tests in `tests/errorHandler.test.js`
 - [x] Step 4: Run tests to verify
 
+## Response Normalisation | Normalise GET /account/:id/sequence response shape
+- [ ] Analyse expected vs actual response shapes
+- [ ] Implement normalization changes
+- [ ] Run tests to verify
+
 ## Cache bypass documentation (?fresh=true)
 - [ ] Confirm all endpoints that respect `?fresh=true` (likely `/network-status` and `/fee-estimate` and their subroutes).
 - [ ] Update `README.md` with a “fresh cache bypass” section and request examples.

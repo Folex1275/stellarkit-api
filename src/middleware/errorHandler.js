@@ -84,7 +84,7 @@ function errorHandler(err, req, res, next) {
     });
   }
 
-  // AccountNotFound errors (Horizon 404 on account lookup)
+// AccountNotFound errors (Horizon 404 on account lookup)
   if (err.isAccountNotFound) {
     logError(404, req, err.message);
     return res.status(404).json({
@@ -96,6 +96,11 @@ function errorHandler(err, req, res, next) {
           "Verify the account address is correct and that the account has been funded.",
       },
     });
+  }
+
+  // Remove _links from Horizon error data if present (normalization)
+  if (err.response && err.response.data && err.response.data._links) {
+    delete err.response.data._links;
   }
 
   // InsufficientXLMReserve errors
