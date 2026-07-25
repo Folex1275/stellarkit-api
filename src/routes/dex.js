@@ -5,7 +5,7 @@ registerParamValidation(router);
 const { Asset } = require("@stellar/stellar-sdk");
 const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
-const { validateAssetCode, validateAccountId, validateAsset } = require("../utils/validators");
+const { validateAssetCode, validateAccountId, validateAsset, validateLimit } = require("../utils/validators");
 const { parseStellarAsset } = require("../utils/asset");
 const { makeOrderBookEmptyError } = require("../utils/errors");
 const cacheService = require("../services/cache");
