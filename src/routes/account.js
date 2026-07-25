@@ -7,15 +7,12 @@ const {
   makeClaimableBalanceNotFoundError,
 } = require("../utils/errors");
 const cacheService = require("../services/cache");
-const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
 
-const { parsePaginationParams } = require("../utils/pagination");
 const { buildAccountAgeResponse } = require("../utils/accountAge");
 const { validateEffectType } = require("../utils/effectTypes");
-
 const axios = require("axios");
 const { Asset } = require("@stellar/stellar-sdk");
 const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
@@ -38,6 +35,60 @@ function validateLimit(limit, max = 200) {
     throw err;
   }
   return n;
+}
+
+function normalizeSignerType(type) {
+  const normalized = String(type || "").toLowerCase();
+
+  if (
+    normalized === "ed25519_public_key" ||
+    normalized === "ed25519" ||
+    normalized === "signer_key_type_ed25519"
+  ) {
+    return "ed25519_public_key";
+  }
+
+  if (
+    normalized === "sha256_hash" ||
+    normalized === "hash_x" ||
+    normalized === "signer_key_type_hash_x"
+  ) {
+    return "hash_x";
+  }
+
+  if (
+    normalized === "preauth_tx" ||
+    normalized === "pre_auth_tx" ||
+    normalized === "signer_key_type_pre_auth_tx"
+  ) {
+    return "pre_auth_tx";
+  }
+
+  return type || "unknown";
+}
+
+function normalizeSigningKeysResponse(account) {
+  const signers = (account.signers || []).map((signer) => ({
+    key: signer.key,
+    weight: Number(signer.weight) || 0,
+    type: normalizeSignerType(signer.type),
+    sponsoredBy: signer.sponsor || signer.sponsored_by || null,
+  }));
+
+  const masterSigner = signers.find(
+    (signer) =>
+      signer.key === account.id && signer.type === "ed25519_public_key",
+  );
+
+  return {
+    signers,
+    masterWeight: masterSigner ? masterSigner.weight : 0,
+    thresholds: {
+      lowThreshold: account.thresholds?.low_threshold ?? 0,
+      medThreshold: account.thresholds?.med_threshold ?? 0,
+      highThreshold: account.thresholds?.high_threshold ?? 0,
+    },
+  };
 }
 
 function handleAccountNotFound(err, next, accountId) {
@@ -157,6 +208,11 @@ router.get("/:id/trustlines", async (req, res, next) => {
     }
 
     return success(res, {
+      accountId: account.id,
+      trustlines,
+      count: trustlines.length,
+      assets: trustlines,
+      assetCount: trustlines.length,
       items: trustlines,
       total: trustlines.length,
       limit: null,
@@ -230,6 +286,21 @@ router.get("/:id/sequence", async (req, res, next) => {
       sequence: account.sequence,
       lastModifiedLedger: account.last_modified_ledger,
     });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/signing-keys
+ */
+router.get("/:id/signing-keys", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+    return success(res, normalizeSigningKeysResponse(account));
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -322,6 +393,19 @@ router.get("/:id/effects", async (req, res, next) => {
 router.get("/:id/payments", async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (req.originalUrl && req.originalUrl.includes("//")) {
+      validateAccountId("");
+    }
+    const reservedWords = [
+      "sequence", "home-domain", "min-balance", "flags", "signers",
+      "trustlines", "analytics", "balances", "summary", "sponsorship",
+      "subentry-health", "merge-eligibility", "offers", "payments",
+      "operation-breakdown", "offer-history", "timeline", "data",
+      "pool-positions", "risk-score", "trustline-health", "age", "volume"
+    ];
+    if (reservedWords.includes(id)) {
+      return next();
+    }
     validateAccountId(id);
 
     const { limit, order, cursor } = parsePaginationParams(req.query);
@@ -329,16 +413,14 @@ router.get("/:id/payments", async (req, res, next) => {
     // Optional asset filters — both are independently optional:
     //   ?assetCode=USDC              → match any issuer of USDC
     //   ?assetCode=USDC&assetIssuer=GA... → exact asset match
-    const filterCode = req.query.assetCode
-      ? req.query.assetCode.toUpperCase()
-      : null;
-    const filterIssuer = req.query.assetIssuer || null;
 
     let query = server.payments().forAccount(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
-    const paymentResponse = await query.call();
-    const rawRecords = paymentResponse.records || [];
+    // Use operations endpoint to get payment + create_account ops
+    const opQuery = server.operations().forAccount(id).limit(limit).order(order);
+    const opResponse = await (cursor ? opQuery.cursor(cursor) : opQuery).call();
+    const rawRecords = opResponse.records || [];
 
     const issuerCache = new Map();
     const tomlCache = new Map();
@@ -397,11 +479,6 @@ router.get("/:id/payments", async (req, res, next) => {
         paymentOps.push({
           type: op.type,
           amount: isPayment ? op.amount : op.starting_balance,
-          asset: {
-            code: assetCode,
-            issuer: assetIssuer,
-            type: isPayment ? op.asset_type || "native" : "native",
-          },
           asset: assetDetail,
           sender: isPayment ? op.from : op.funder,
           receiver: isPayment ? op.to : op.account,
@@ -434,10 +511,10 @@ router.get("/:id/payments", async (req, res, next) => {
     const nextCursor = lastRecord ? lastRecord.paging_token : null;
 
     return success(res, {
-      payments,
-      total: payments.length,
+      items: paymentOps,
+      total: paymentOps.length,
       limit,
-      cursor: payments.length ? nextCursor : null,
+      cursor: paymentOps.length ? nextCursor : null,
     });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
@@ -534,10 +611,9 @@ router.get("/:id/offers", async (req, res, next) => {
       }
     }
 
-    const limit = validateLimit(req.query.limit ?? 20);
-    const cursor = req.query.cursor || undefined;
+    const { limit, order, cursor } = parsePaginationParams(req.query);
 
-    let query = server.offers().forAccount(id).limit(limit);
+    let query = server.offers().forAccount(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
     const offerResponse = await query.call();
@@ -601,6 +677,7 @@ router.get("/:id/offers", async (req, res, next) => {
     }
   }
 });
+
 
 /**
  * GET /account/:id/effects
@@ -699,7 +776,8 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
-    const cacheKey = `claimable-balances:${id}`;
+    const includeExpired = req.query.includeExpired === "true";
+    const cacheKey = `claimable-balances:${id}:${includeExpired}`;
     const fresh = req.query.fresh === "true";
 
     if (!fresh) {
@@ -710,10 +788,9 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
       }
     }
 
-    const limit = validateLimit(req.query.limit || 200, 200);
-    const cursor = req.query.cursor || undefined;
+    const { limit, order, cursor } = parsePaginationParams(req.query);
 
-    let query = server.claimableBalances().forClaimant(id).limit(limit);
+    let query = server.claimableBalances().forClaimant(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
     const response = await query.call();
@@ -791,6 +868,8 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
 
       const evaluation = evaluatePredicate(claimant.predicate);
 
+      const isExpired = evaluation.reason.includes("Deadline passed");
+
       const balanceEntry = {
         id: balance.id,
         asset: normalizeAssetFromString(balance.asset),
@@ -799,14 +878,15 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
         lastModifiedLedger: balance.last_modified_ledger,
         predicate: claimant.predicate,
         claimability: evaluation.reason,
+        isExpired,
       };
 
       if (evaluation.canClaim) {
         claimable.push(balanceEntry);
+      } else if (isExpired) {
+        if (includeExpired) expired.push(balanceEntry);
       } else if (evaluation.reason.includes("Not yet started")) {
         notYetClaimable.push(balanceEntry);
-      } else if (evaluation.reason.includes("Deadline passed")) {
-        expired.push(balanceEntry);
       } else {
         notYetClaimable.push(balanceEntry);
       }
@@ -1246,11 +1326,14 @@ router.get("/:id/sponsorship", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
-    const [account, sponsoringResponse] = await Promise.all([
+    const [account, sponsoringResponse, offersResponse] = await Promise.all([
       server.loadAccount(id),
       server.accounts().sponsor(id).call(),
+      server.offers().forAccount(id).call(),
     ]);
 
+    const BASE_RESERVE_XLM = 0.5;
+    const reserveAmount = BASE_RESERVE_XLM.toFixed(7);
     const sponsoredEntries = [];
 
     (account.balances || []).forEach((b) => {
@@ -1259,6 +1342,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
           type: "trustline",
           asset: normalizeAsset(b.asset_code, b.asset_issuer, b.asset_type),
           sponsor: b.sponsor,
+          reserveAmount,
         });
       }
     });
@@ -1269,6 +1353,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
           type: "signer",
           key: s.key,
           sponsor: s.sponsor,
+          reserveAmount,
         });
       }
     });
@@ -1281,10 +1366,22 @@ router.get("/:id/sponsorship", async (req, res, next) => {
             type: "data_entry",
             key,
             sponsor: dataSponsors[key],
+            reserveAmount,
           });
         }
       });
     }
+
+    (offersResponse.records || []).forEach((offer) => {
+      if (offer.sponsor) {
+        sponsoredEntries.push({
+          type: "offer",
+          offerId: offer.id,
+          sponsor: offer.sponsor,
+          reserveAmount,
+        });
+      }
+    });
 
     const accountsSponsoring = (sponsoringResponse.records || []).map(
       (acc) => acc.id,
@@ -1292,10 +1389,37 @@ router.get("/:id/sponsorship", async (req, res, next) => {
 
     return success(res, {
       accountId: account.id,
+      accountSponsor: account.sponsor || null,
+      sponsoredEntries,
+      accountsSponsoring,
       sponsoredEntries,
       accountsSponsoring,
       count: sponsoredEntries.length,
     });
+  }
+
+  return entries;
+}
+
+/**
+ * GET /account/:id/sponsorships
+ */
+router.get("/:id/sponsorships", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const [account, sponsoringResponse] = await Promise.all([
+      server.loadAccount(id),
+      server.accounts().sponsor(id).call(),
+    ]);
+
+    const sponsoredBy = buildSponsoredByEntries(account);
+    const sponsoring = (sponsoringResponse.records || []).flatMap((sponsoredAccount) =>
+      buildSponsoringEntries(sponsoredAccount, id),
+    );
+
+    return success(res, { sponsoring, sponsoredBy });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -1408,6 +1532,50 @@ router.get("/:id/age", async (req, res, next) => {
         createdAt: creation.timestamp,
       }),
     );
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/transaction-count
+ * Returns a lightweight summary of an account's total transaction count
+ * plus the timestamps of its first and last transactions, without requiring
+ * callers to paginate through the full transaction history themselves.
+ */
+router.get("/:id/transaction-count", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    await server.loadAccount(id);
+
+    let count = 0;
+    let firstTransactionAt = null;
+    let lastTransactionAt = null;
+    let cursor;
+    let done = false;
+
+    while (!done) {
+      let query = server.transactions().forAccount(id).limit(200).order("asc");
+      if (cursor) query = query.cursor(cursor);
+
+      const page = await query.call();
+      const records = page.records || [];
+
+      if (records.length === 0) break;
+
+      if (count === 0) {
+        firstTransactionAt = toISOTimestamp(records[0].created_at);
+      }
+      lastTransactionAt = toISOTimestamp(records[records.length - 1].created_at);
+      count += records.length;
+      cursor = records[records.length - 1].paging_token;
+
+      if (records.length < 200) done = true;
+    }
+
+    return success(res, { count, firstTransactionAt, lastTransactionAt });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -1807,6 +1975,72 @@ router.get("/:id/pool-positions", async (req, res, next) => {
 });
 
 /**
+ * GET /account/:id/transaction-count?since=<ISO8601>
+ * Counts transactions for an account. Without `since`, paginates through the
+ * account's entire transaction history to produce an exact count. With `since`,
+ * walks records newest-first and stops as soon as a transaction older than the
+ * cutoff is reached, avoiding a full history scan.
+ */
+router.get("/:id/transaction-count", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+
+    const poolShareTrustlines = (account.balances || []).filter(
+      (balance) => balance.asset_type === "liquidity_pool_shares",
+    );
+
+    if (poolShareTrustlines.length === 0) {
+      return success(res, { shares: [], total: 0 });
+    }
+
+    const poolDetailsPromises = poolShareTrustlines.map((trustline) =>
+      server
+        .liquidityPools()
+        .liquidityPoolId(trustline.liquidity_pool_id)
+        .call()
+        .catch((err) => {
+          if (err && err.response && err.response.status === 404) return null;
+          throw err;
+        }),
+    );
+
+    const poolDetails = await Promise.all(poolDetailsPromises);
+
+    const shares = [];
+
+    for (let i = 0; i < poolShareTrustlines.length; i++) {
+      const trustline = poolShareTrustlines[i];
+      const pool = poolDetails[i];
+      if (!pool) continue;
+
+      const reserveA = pool.reserves[0];
+      const reserveB = pool.reserves[1];
+
+      shares.push({
+        poolId: pool.id,
+        shares: parseFloat(trustline.balance).toFixed(7),
+        totalPoolShares: parseFloat(pool.total_shares).toFixed(7),
+        reserveA: {
+          asset: reserveA.asset,
+          amount: parseFloat(reserveA.amount).toFixed(7),
+        },
+        reserveB: {
+          asset: reserveB.asset,
+          amount: parseFloat(reserveB.amount).toFixed(7),
+        },
+      });
+    }
+
+    return success(res, { shares, total: shares.length });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
  * POST /account/:id/multisig-plan
  */
 // GET /account/:id/transaction-stats
@@ -1817,17 +2051,7 @@ router.get("/:id/transaction-stats", async (req, res, next) => {
     validateAccountId(id);
 
     const limitRaw = req.query.limit;
-    const limit = limitRaw === undefined ? 200 : parseInt(limitRaw, 10);
-    if (isNaN(limit) || limit < 1 || limit > 200) {
-      const err = new Error(
-        "Query parameter 'limit': must be an integer between 1 and 200.",
-      );
-      err.isValidation = true;
-      err.field = "limit";
-      err.receivedValue = String(limitRaw);
-      err.expectedFormat = "1–200";
-      throw err;
-    }
+    const limit = limitRaw === undefined ? 20 : validateLimit(limitRaw);
 
     const txResponse = await server
       .transactions()
@@ -2000,44 +2224,6 @@ router.post("/:id/multisig-plan", async (req, res, next) => {
 });
 
 /**
- * GET /account/:id/claimable-balances
- */
-router.get("/:id/claimable-balances", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    validateAccountId(id);
-
-    const limit = req.query.limit ? validateLimit(req.query.limit) : 200;
-    const cursor = req.query.cursor || undefined;
-
-    let query = server.claimableBalances().claimant(id).limit(limit);
-    if (cursor) {
-      query = query.cursor(cursor);
-    }
-
-    const response = await query.call();
-
-    const claimableBalances = (response.records || []).map((balance) => ({
-      id: balance.id,
-      asset: normalizeAssetFromString(balance.asset),
-      amount: balance.amount,
-      claimants: balance.claimants,
-      predicate: balance.predicate,
-      lastModifiedLedger: balance.last_modified_ledger,
-      lastModifiedTime: balance.last_modified_time,
-    }));
-
-    return success(res, {
-      items: claimableBalances,
-      total: claimableBalances.length,
-      cursor: response.next_cursor || null,
-    });
-  } catch (err) {
-    handleAccountNotFound(err, next, req.params.id);
-  }
-});
-
-/**
  * GET /account/:id/data
  */
 router.get("/:id/data", async (req, res, next) => {
@@ -2062,5 +2248,689 @@ router.get("/:id/data", async (req, res, next) => {
     handleAccountNotFound(err, next, req.params.id);
   }
 });
+
+/**
+ * GET /account/:id/transaction-count
+ * Returns the total number of transactions for an account.
+ *
+ * Transaction counts only change when new transactions are submitted, making
+ * short-term caching effective. Responses are cached per account ID.
+ *
+ * Query params:
+ *   - fresh (boolean, default: false) — bypasses the cache when set to "true"
+ *
+ * Response headers:
+ *   - X-Cache: HIT  — served from cache
+ *   - X-Cache: MISS — fetched live from Horizon and cached
+ *
+ * Cache TTL is configurable via the CACHE_TTL_TX_COUNT_MS environment variable
+ * (default: 20 000 ms / 20 seconds).
+ */
+router.get("/:id/transaction-count", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const fresh = req.query.fresh === "true";
+    const cacheKey = `transaction-count:${id}`;
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached !== undefined) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
+    // Page through all transactions counting records until Horizon returns an
+    // empty page. Using limit=200 (the Horizon maximum) minimises round trips.
+    let count = 0;
+    let cursor;
+    do {
+      let query = server
+        .transactions()
+        .forAccount(id)
+        .limit(200)
+        .order("asc");
+      if (cursor) query = query.cursor(cursor);
+
+      const response = await query.call();
+      const records = response.records || [];
+      count += records.length;
+
+      if (records.length < 200) break;
+      cursor = records[records.length - 1].paging_token;
+    } while (true); // eslint-disable-line no-constant-condition
+
+    const data = { accountId: id, transactionCount: count };
+
+    cacheService.set(cacheKey, data, cacheTTL.transactionCount);
+    res.set("X-Cache", "MISS");
+    return success(res, data);
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/signing-keys
+ *
+ * Returns all signers for an account, each normalised with key, weight, type,
+ * and sponsoredBy where applicable.  Also returns the master key weight and
+ * the three signing thresholds.
+ *
+ * Query params:
+ *   - weight  (positive integer, optional) — return only signers with weight >= value
+ *   - fresh   (boolean, default: false)    — bypass cache when set to "true"
+ *
+ * Cache:
+ *   Keyed by account ID. TTL defaults to 20 s, configurable via
+ *   CACHE_TTL_SIGNING_KEYS_MS. X-Cache header is always present.
+ */
+router.get("/:id/signing-keys", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    // --- ?weight validation ---
+    const rawWeight = req.query.weight;
+    let minWeight = null;
+    if (rawWeight !== undefined) {
+      const parsed = Number(rawWeight);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        const err = new Error(
+          "Query parameter 'weight': must be a positive integer.",
+        );
+        err.isValidation = true;
+        err.field = "weight";
+        err.receivedValue = String(rawWeight);
+        err.expectedFormat = "positive integer (e.g. 1, 2, 3)";
+        throw err;
+      }
+      minWeight = parsed;
+    }
+
+    const fresh = req.query.fresh === "true";
+    const cacheKey = `signing-keys:${id}`;
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        // Apply weight filter to the cached payload before responding
+        const data =
+          minWeight !== null
+            ? {
+                ...cached,
+                signers: cached.signers.filter((s) => s.weight >= minWeight),
+              }
+            : cached;
+        return success(res, data);
+      }
+    }
+
+    const account = await server.loadAccount(id);
+    const dataEntries = account.data_attr || {};
+
+    const formattedData = Object.entries(dataEntries).map(([key, rawValue]) => {
+      let decodedValue = null;
+      try {
+        decodedValue = Buffer.from(rawValue, "base64").toString("utf8");
+      } catch (e) {
+        // Not decodable as UTF-8
+      }
+
+    // Normalise every signer entry from Horizon into a clean shape
+    const signers = (account.signers || []).map((s) => ({
+      key: s.key,
+      weight: Number(s.weight),
+      type: s.type || "ed25519_public_key",
+      ...(s.sponsor ? { sponsoredBy: s.sponsor } : {}),
+    }));
+
+    // Master weight is the weight of the account's own key in the signers list.
+    // Horizon always includes the master key; fall back to thresholds.master_weight
+    // if the SDK exposes it differently.
+    const masterSigner = signers.find((s) => s.key === account.id);
+    const masterWeight =
+      masterSigner !== undefined
+        ? masterSigner.weight
+        : Number(account.master_weight ?? 0);
+
+    const thresholds = {
+      low: Number(account.thresholds?.low_threshold ?? 0),
+      medium: Number(account.thresholds?.med_threshold ?? 0),
+      high: Number(account.thresholds?.high_threshold ?? 0),
+    };
+
+    const payload = { signers, masterWeight, thresholds };
+
+    cacheService.set(cacheKey, payload, cacheTTL.signingKeys);
+    res.set("X-Cache", "MISS");
+
+    // Apply weight filter after caching the full payload so the cache always
+    // stores the complete list and each weight threshold is a view over it.
+    const data =
+      minWeight !== null
+        ? { ...payload, signers: signers.filter((s) => s.weight >= minWeight) }
+        : payload;
+
+    return success(res, data);
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/sponsorships
+ *
+ * Returns a typed sponsorship summary for the account.
+ * Includes all entries sponsored by other accounts (sponsoredBy) and
+ * accounts that this account is currently sponsoring (sponsoring).
+ *
+ * Each sponsoredBy entry contains:
+ *   - type: "trustline" | "signer" | "data_entry"
+ *   - address: asset string for trustlines, key for signers/data entries
+ *   - sponsor: the account paying the reserve
+ *   - reserveAmount: "0.5000000" (base reserve per subentry)
+ *
+ * @example
+ * GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/sponsorships
+ */
+router.get("/:id/sponsorships", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const [account, sponsoringResponse] = await Promise.all([
+      server.loadAccount(id),
+      server.accounts().sponsor(id).call(),
+    ]);
+
+    // Base reserve per sponsored subentry on Stellar (0.5 XLM)
+    const RESERVE_PER_SUBENTRY = "0.5000000";
+
+    const sponsoredBy = [];
+
+    (account.balances || []).forEach((b) => {
+      if (b.sponsor) {
+        sponsoredBy.push({
+          type: "trustline",
+          address:
+            b.asset_type === "native"
+              ? "XLM"
+              : `${b.asset_code}:${b.asset_issuer}`,
+          sponsor: b.sponsor,
+          reserveAmount: RESERVE_PER_SUBENTRY,
+        });
+      }
+    });
+
+    (account.signers || []).forEach((s) => {
+      if (s.sponsor) {
+        sponsoredBy.push({
+          type: "signer",
+          address: s.key,
+          sponsor: s.sponsor,
+          reserveAmount: RESERVE_PER_SUBENTRY,
+        });
+      }
+    });
+
+    if (account.data_attr) {
+      const dataSponsors = account.data_sponsors || {};
+      Object.keys(account.data_attr).forEach((key) => {
+        if (dataSponsors[key]) {
+          sponsoredBy.push({
+            type: "data_entry",
+            address: key,
+            sponsor: dataSponsors[key],
+            reserveAmount: RESERVE_PER_SUBENTRY,
+          });
+        }
+      });
+    }
+
+    const sponsoring = (sponsoringResponse.records || []).map((acc) => acc.id);
+
+    return success(res, {
+      accountId: account.id,
+      sponsoredBy,
+      sponsoring,
+      count: sponsoredBy.length,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/home-domain
+ * Returns the home_domain for a Stellar account.
+ */
+router.get("/:id/home-domain", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+
+    return success(res, {
+      accountId: account.id,
+      homeDomain: account.home_domain || null,
+      lastModifiedLedger: account.last_modified_ledger,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
+ * GET /account/:id/min-balance
+ * Returns the calculated minimum balance and reserve breakdown for a Stellar account.
+ */
+router.get("/:id/min-balance", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+    const subentryCount = account.subentry_count || 0;
+    const baseReserveStroops = 5000000;
+    const baseReserveXLM = "0.5000000";
+
+    const accountReserveStroops = baseReserveStroops * 2;
+    const subentryReserveStroops = baseReserveStroops * subentryCount;
+    const minimumBalanceStroops = accountReserveStroops + subentryReserveStroops;
+
+    return success(res, {
+      accountId: account.id,
+      subentryCount,
+      baseReserve: {
+        xlm: baseReserveXLM,
+        stroops: baseReserveStroops,
+      },
+      minimumBalance: {
+        xlm: (minimumBalanceStroops / 1e7).toFixed(7),
+        stroops: minimumBalanceStroops,
+      },
+      reserveBreakdown: {
+        accountReserve: {
+          xlm: (accountReserveStroops / 1e7).toFixed(7),
+          stroops: accountReserveStroops,
+        },
+        subentryReserve: {
+          xlm: (subentryReserveStroops / 1e7).toFixed(7),
+          stroops: subentryReserveStroops,
+        },
+      },
+      lastModifiedLedger: account.last_modified_ledger,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
+ * GET /account/:id/flags
+ * Returns the flags of a Stellar account.
+ */
+router.get("/:id/flags", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+    const rawFlags = account.flags || {};
+
+    return success(res, {
+      accountId: account.id,
+      flags: {
+        authRequired: !!rawFlags.auth_required,
+        authRevocable: !!rawFlags.auth_revocable,
+        authImmutable: !!rawFlags.auth_immutable,
+        authClawbackEnabled: !!rawFlags.auth_clawback_enabled,
+      },
+      lastModifiedLedger: account.last_modified_ledger,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
+ * GET /account/:id/signers
+ * Returns the signers and thresholds of a Stellar account.
+ */
+router.get("/:id/signers", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+    const rawThresholds = account.thresholds || {};
+
+    const signers = (account.signers || []).map((signer) => ({
+      key: signer.key,
+      weight: signer.weight,
+      type: signer.type,
+      sponsor: signer.sponsor || null,
+    }));
+
+    return success(res, {
+      accountId: account.id,
+      signers,
+      thresholds: {
+        lowThreshold: rawThresholds.low_threshold || 0,
+        medThreshold: rawThresholds.med_threshold || 0,
+        highThreshold: rawThresholds.high_threshold || 0,
+      },
+      lastModifiedLedger: account.last_modified_ledger,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
+ * GET /account/:id/operation-breakdown
+ * Analyzes the last 200 operations and returns a breakdown by operation type.
+ * Useful for understanding how an account is being used.
+ *
+ * @param {string} id - Stellar account public key (G...)
+ */
+router.get("/:id/operation-breakdown", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    // Fetch last 200 operations
+    const opResponse = await server
+      .operations()
+      .forAccount(id)
+      .limit(200)
+      .order("desc")
+      .call();
+
+    const records = opResponse.records;
+    const total = records.length;
+
+    if (total === 0) {
+      return success(res, {
+        total: 0,
+        breakdown: [],
+        mostUsedOperation: null,
+        leastUsedOperation: null,
+      });
+    }
+
+    const counts = {};
+    records.forEach((op) => {
+      counts[op.type] = (counts[op.type] || 0) + 1;
+    });
+
+    const breakdown = Object.entries(counts)
+      .map(([type, count]) => ({
+        type,
+        count,
+        percentage: parseFloat(((count / total) * 100).toFixed(2)),
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    return success(res, {
+      total,
+      breakdown,
+      mostUsedOperation: breakdown[0].type,
+      leastUsedOperation: breakdown[breakdown.length - 1].type,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+router.get("/:id/timeline", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const { limit, cursor } = parsePaginationParams(req.query, 50);
+
+    let query = server.operations().forAccount(id).limit(limit).order("desc");
+
+    if (cursor) query = query.cursor(cursor);
+
+    const opResponse = await query.call();
+    const records = opResponse.records;
+
+    const timeline = records.map((op) => {
+      const base = {
+        id: op.id,
+        timestamp: op.created_at,
+        transactionHash: op.transaction_hash,
+      };
+
+      switch (op.type) {
+        case "create_account":
+          if (op.account === id) {
+            return {
+              ...base,
+              type: "account_created",
+              description: `Account created with ${op.starting_balance} XLM by ${op.funder}`,
+              amount: op.starting_balance,
+              asset: "XLM",
+              counterparty: op.funder,
+            };
+          } else {
+            return {
+              ...base,
+              type: "payment_sent",
+              description: `Sent ${op.starting_balance} XLM to create account ${op.account}`,
+              amount: op.starting_balance,
+              asset: "XLM",
+              counterparty: op.account,
+            };
+          }
+
+        case "payment":
+          const isSent = op.from === id;
+          const assetCode = op.asset_type === "native" ? "XLM" : op.asset_code;
+          return {
+            ...base,
+            type: isSent ? "payment_sent" : "payment_received",
+            description: isSent
+              ? `Sent ${op.amount} ${assetCode} to ${op.to}`
+              : `Received ${op.amount} ${assetCode} from ${op.from}`,
+            amount: op.amount,
+            asset: assetCode,
+            counterparty: isSent ? op.to : op.from,
+          };
+
+        case "path_payment_strict_receive":
+        case "path_payment_strict_send":
+          const isPathSent = op.from === id;
+          const sentAsset =
+            op.source_asset_type === "native" ? "XLM" : op.source_asset_code;
+          const receivedAsset =
+            op.asset_type === "native" ? "XLM" : op.asset_code;
+
+          if (isPathSent) {
+            return {
+              ...base,
+              type: "payment_sent",
+              description: `Sent ${op.source_amount} ${sentAsset} (converted to ${op.amount} ${receivedAsset}) to ${op.to}`,
+              amount: op.source_amount,
+              asset: sentAsset,
+              counterparty: op.to,
+            };
+          } else {
+            return {
+              ...base,
+              type: "payment_received",
+              description: `Received ${op.amount} ${receivedAsset} (converted from ${op.source_amount} ${sentAsset}) from ${op.from}`,
+              amount: op.amount,
+              asset: receivedAsset,
+              counterparty: op.from,
+            };
+          }
+
+        case "change_trust":
+          const isAdded = parseFloat(op.limit) > 0;
+          return {
+            ...base,
+            type: isAdded ? "trustline_added" : "trustline_removed",
+            description: isAdded
+              ? `Added trustline for ${op.asset_code}`
+              : `Removed trustline for ${op.asset_code}`,
+            amount: op.limit,
+            asset: op.asset_code,
+            counterparty: op.asset_issuer,
+          };
+
+        case "manage_sell_offer":
+        case "manage_buy_offer":
+        case "create_passive_sell_offer":
+          const isRemove =
+            op.type !== "create_passive_sell_offer" &&
+            parseFloat(op.amount) === 0 &&
+            op.offer_id !== "0";
+          const sellAsset =
+            op.selling_asset_type === "native" ? "XLM" : op.selling_asset_code;
+          const buyAsset =
+            op.buying_asset_type === "native" ? "XLM" : op.buying_asset_code;
+
+          if (isRemove) {
+            return {
+              ...base,
+              type: "offer_removed",
+              description: `Cancelled offer #${op.offer_id}`,
+              amount: null,
+              asset: null,
+              counterparty: null,
+            };
+          } else {
+            return {
+              ...base,
+              type: "offer_created",
+              description: `Created offer to sell ${op.amount} ${sellAsset} for ${buyAsset}`,
+              amount: op.amount,
+              asset: sellAsset,
+              counterparty: null,
+            };
+          }
+
+        default:
+          return {
+            ...base,
+            type: op.type,
+            description: `Operation of type ${op.type}`,
+            amount: null,
+            asset: null,
+            counterparty: null,
+          };
+      }
+    });
+
+    const lastRecord = records[records.length - 1];
+    const nextCursor = lastRecord ? lastRecord.paging_token : null;
+
+    return success(res, timeline, {
+      meta: {
+        count: timeline.length,
+        limit,
+        nextCursor,
+        hasMore: records.length === limit,
+      },
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
+ AccountTrustlineHealthDasboardEndpoint
+ * GET /account/:id/trustline-health
+ * Returns a complete health overview of all trustlines on an account,
+ * including authorization status, liability usage, available capacity,
+ * and warnings for trustlines near their limits.
+
+ * GET /account/:id/age
+ * Returns account age and longevity metrics for trust and reputation systems.
+ *
+ * Fetches the account's first funding transaction from Horizon and calculates:
+ * - ageInDays: Complete days since account creation
+ * - ageInMonths: Floored months (ageInDays / 30.4375)
+ * - ageInYears: Floored years (ageInDays / 365.25)
+ * - maturity: 'new' (<30 days), 'established' (30–364 days), or 'veteran' (≥365 days)
+ * - createdAt: ISO 8601 timestamp of account creation
+ * - createdAtLedger: Ledger sequence number of first funding transaction
+ main
+ *
+ * @param {string} id - Stellar account public key (G...)
+ *
+ * @example
+ AccountTrustlineHealthDasboardEndpoint
+ * GET /account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/trustline-health
+ */
+router.get("/:id/trustline-health", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+
+    // Filter out native XLM and extract trustline health data
+    const trustlines = account.balances
+      .filter((b) => b.asset_type !== "native")
+      .map((trustline) => {
+        const balance = parseFloat(trustline.balance || "0");
+        const limit = parseFloat(trustline.limit || "0");
+        const buyingLiabilities = parseFloat(
+          trustline.buying_liabilities || "0",
+        );
+        const sellingLiabilities = parseFloat(
+          trustline.selling_liabilities || "0",
+        );
+
+        // Calculate usage percentage
+        // Usage = (balance + buying liabilities) / limit * 100
+        const usageAmount = balance + buyingLiabilities;
+        const usagePercent = limit > 0 ? (usageAmount / limit) * 100 : 0;
+
+        // Calculate available capacity
+        // Available = limit - balance - buying liabilities
+        const availableCapacity = Math.max(0, limit - usageAmount);
+
+        // Flag as warning if usage exceeds 90%
+        const warning = usagePercent > 90 ? "near_limit" : null;
+
+        return {
+          assetCode: trustline.asset_code,
+          assetIssuer: trustline.asset_issuer,
+          balance: balance.toString(),
+          limit: limit.toString(),
+          buyingLiabilities: buyingLiabilities.toString(),
+          sellingLiabilities: sellingLiabilities.toString(),
+          usagePercent: Math.round(usagePercent * 100) / 100, // Round to 2 decimals
+          availableCapacity: availableCapacity.toString(),
+          isAuthorized: trustline.is_authorized === true,
+          isClawbackEnabled: trustline.is_clawback_enabled || false,
+          warning: warning,
+        };
+      });
+
+    // Count warnings
+    const warningCount = trustlines.filter((t) => t.warning !== null).length;
+
+    return success(res, {
+      accountId: account.id,
+      trustlineCount: trustlines.length,
+      warningCount: warningCount,
+      trustlines: trustlines,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
 
 module.exports = router;

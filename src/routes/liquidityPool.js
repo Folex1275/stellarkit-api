@@ -75,7 +75,7 @@ function tradeAssetMatchesFilter(trade, side, filter) {
 router.get("/:id/trades", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { limit, order, cursor } = parsePaginationParams(req.query, 200);
+    const { limit, order, cursor } = parsePaginationParams(req.query);
     const baseAssetFilter = parseAssetFilter(req.query.baseAsset, "baseAsset");
     const counterAssetFilter = parseAssetFilter(req.query.counterAsset, "counterAsset");
     const fresh = req.query.fresh === "true";
