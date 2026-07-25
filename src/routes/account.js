@@ -4,12 +4,7 @@ const { server, NETWORK, fetchAccountCreation } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
 const { makeAccountNotFoundError } = require("../utils/errors");
 const cacheService = require("../services/cache");
-
-const {
-  makeAccountNotFoundError,
-  makeClaimableBalanceNotFoundError,
-} = require("../utils/errors");
-const { validateAccountId, validateAssetCode } = require("../utils/validators");
+const { validateAccountId, validateAssetCode, validateLimit } = require("../utils/validators");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
@@ -28,18 +23,6 @@ const cacheTTL = require("../config/cacheConfig");
 
 // Cache TTL for account endpoint responses (in seconds)
 const CACHE_TTL_ACCOUNT = parseInt(process.env.CACHE_TTL_ACCOUNT_MS, 10) / 1000 || 10;
-
-function validateLimit(limit, max = 200) {
-  const n = Number(limit);
-  if (!Number.isInteger(n) || n <= 0 || n > max) {
-    const err = new Error(`limit must be between 1 and ${max}`);
-    err.status = 400;
-    err.field = "limit";
-    err.receivedValue = String(limit);
-    throw err;
-  }
-  return n;
-}
 
 function handleAccountNotFound(err, next, accountId) {
   if (err && err.response && err.response.status === 404) {
@@ -239,86 +222,6 @@ router.get("/:id/sequence", async (req, res, next) => {
 });
 
 /**
- * GET /account/:id/effects
- */
-router.get("/:id/effects", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    validateAccountId(id);
-
-    const { limit, cursor } = parsePaginationParams(req.query, 200);
-
-    // Ensure account exists for proper 404s
-    await server.loadAccount(id);
-
-    let query = server.effects().forAccount(id).limit(limit).order("desc");
-    if (cursor) query = query.cursor(cursor);
-
-    const effectsResponse = await query.call();
-    const records = effectsResponse.records || [];
-
-    const effects = records.map((eff) => {
-      const effectId = eff.id || eff.effect_id || null;
-      const type = eff.type;
-      const createdAt = toISOTimestamp(eff.created_at);
-
-      // Type specific fields (best-effort normalization)
-      const asset = (() => {
-        if (eff.asset_type === "native")
-          return { code: "XLM", issuer: null, type: "native" };
-        if (eff.asset_type)
-          return {
-            code: eff.asset_code || null,
-            issuer: eff.asset_issuer || null,
-            type: eff.asset_type,
-          };
-        return null;
-      })();
-
-      const amount =
-        eff.amount !== undefined
-          ? eff.amount
-          : eff.starting_balance !== undefined
-            ? eff.starting_balance
-            : null;
-
-      return {
-        effectId,
-        type,
-        createdAt,
-        ...(asset ? { asset } : {}),
-        ...(amount !== null ? { amount } : {}),
-        // passthrough common Horizon fields when present
-        ...(eff.account !== undefined ? { account: eff.account } : {}),
-        ...(eff.type ? {} : {}),
-        ...(eff.details !== undefined ? { details: eff.details } : {}),
-        ...(eff.paging_token ? { pagingToken: eff.paging_token } : {}),
-        // Provide a normalized cursor for internal debugging/consistency
-        ...(eff.paging_token ? { nextPagingToken: eff.paging_token } : {}),
-      };
-    });
-
-    const nextCursor =
-      records.length > 0
-        ? records[records.length - 1].paging_token || null
-        : null;
-
-    return success(res, {
-      effects,
-      total: effects.length,
-      limit,
-      cursor: effects.length ? nextCursor : null,
-    });
-  } catch (err) {
-    if (err && err.response && err.response.status === 404) {
-      return next(makeAccountNotFoundError(req.params.id, NETWORK));
-    }
-    if (err && err.isAccountNotFound) return next(err);
-    next(err);
-  }
-});
-
-/**
  * GET /account/:id/payments
  * Returns payment and create_account operations with full asset detail (including TOML metadata).
  */
@@ -332,88 +235,12 @@ router.get("/:id/payments", async (req, res, next) => {
     // Optional asset filters — both are independently optional:
     //   ?assetCode=USDC              → match any issuer of USDC
     //   ?assetCode=USDC&assetIssuer=GA... → exact asset match
-    const filterCode = req.query.assetCode
-      ? req.query.assetCode.toUpperCase()
-      : null;
-    const filterIssuer = req.query.assetIssuer || null;
 
     let query = server.payments().forAccount(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
     const paymentResponse = await query.call();
     const rawRecords = paymentResponse.records || [];
-    const opResponse = await query.call();
-    const rawRecords = opResponse.records || [];
-
-    const issuerCache = new Map();
-    const tomlCache = new Map();
-
-    const paymentOps = [];
-    for (const op of rawRecords) {
-      if (op.type === "payment" || op.type === "create_account") {
-        const isPayment = op.type === "payment";
-        const assetCode = isPayment ? op.asset_code || "XLM" : "XLM";
-        const assetIssuer = isPayment ? op.asset_issuer || null : null;
-
-        // Apply assetCode filter (case-insensitive, already uppercased above)
-        if (filterCode && assetCode.toUpperCase() !== filterCode) return;
-
-        // Apply assetIssuer filter only when both params are provided
-        if (filterCode && filterIssuer && assetIssuer !== filterIssuer) return;
-        const assetType = isPayment ? op.asset_type || "native" : "native";
-
-        let assetDetail = {
-          code: assetCode,
-          issuer: assetIssuer,
-          type: assetType,
-        };
-
-        if (assetType !== "native" && assetIssuer) {
-          if (!issuerCache.has(assetIssuer)) {
-            issuerCache.set(
-              assetIssuer,
-              server
-                .loadAccount(assetIssuer)
-                .then((a) => a.home_domain || null)
-                .catch(() => null),
-            );
-          }
-
-          const homeDomain = await issuerCache.get(assetIssuer);
-
-          if (homeDomain) {
-            if (!tomlCache.has(homeDomain)) {
-              tomlCache.set(homeDomain, homeDomain);
-            }
-            try {
-              const toml = await getAssetMetadataFromToml(
-                homeDomain,
-                assetCode,
-              );
-              if (toml) {
-                assetDetail = { ...assetDetail, toml };
-              }
-            } catch (_) {
-              // TOML resolution failed, keep basic asset detail
-            }
-          }
-        }
-
-        paymentOps.push({
-          type: op.type,
-          amount: isPayment ? op.amount : op.starting_balance,
-          asset: {
-            code: assetCode,
-            issuer: assetIssuer,
-            type: isPayment ? op.asset_type || "native" : "native",
-          },
-          asset: assetDetail,
-          sender: isPayment ? op.from : op.funder,
-          receiver: isPayment ? op.to : op.account,
-          createdAt: toISOTimestamp(op.created_at),
-        });
-      }
-    }
 
     const payments = rawRecords.map((op) => {
       const isPayment = op.type === "payment";
@@ -538,10 +365,9 @@ router.get("/:id/offers", async (req, res, next) => {
       }
     }
 
-    const limit = validateLimit(req.query.limit ?? 20);
-    const cursor = req.query.cursor || undefined;
+    const { limit, order, cursor } = parsePaginationParams(req.query);
 
-    let query = server.offers().forAccount(id).limit(limit);
+    let query = server.offers().forAccount(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
     const offerResponse = await query.call();
@@ -711,10 +537,9 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
       }
     }
 
-    const limit = validateLimit(req.query.limit || 200, 200);
-    const cursor = req.query.cursor || undefined;
+    const { limit, order, cursor } = parsePaginationParams(req.query);
 
-    let query = server.claimableBalances().forClaimant(id).limit(limit);
+    let query = server.claimableBalances().forClaimant(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
     const response = await query.call();
@@ -1827,17 +1652,7 @@ router.get("/:id/transaction-stats", async (req, res, next) => {
     validateAccountId(id);
 
     const limitRaw = req.query.limit;
-    const limit = limitRaw === undefined ? 200 : parseInt(limitRaw, 10);
-    if (isNaN(limit) || limit < 1 || limit > 200) {
-      const err = new Error(
-        "Query parameter 'limit': must be an integer between 1 and 200.",
-      );
-      err.isValidation = true;
-      err.field = "limit";
-      err.receivedValue = String(limitRaw);
-      err.expectedFormat = "1–200";
-      throw err;
-    }
+    const limit = limitRaw === undefined ? 20 : validateLimit(limitRaw);
 
     const txResponse = await server
       .transactions()
@@ -2003,44 +1818,6 @@ router.post("/:id/multisig-plan", async (req, res, next) => {
       highThreshold: thresholds.high_threshold,
       signerWeights,
       validCombinations,
-    });
-  } catch (err) {
-    handleAccountNotFound(err, next, req.params.id);
-  }
-});
-
-/**
- * GET /account/:id/claimable-balances
- */
-router.get("/:id/claimable-balances", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    validateAccountId(id);
-
-    const limit = req.query.limit ? validateLimit(req.query.limit) : 200;
-    const cursor = req.query.cursor || undefined;
-
-    let query = server.claimableBalances().claimant(id).limit(limit);
-    if (cursor) {
-      query = query.cursor(cursor);
-    }
-
-    const response = await query.call();
-
-    const claimableBalances = (response.records || []).map((balance) => ({
-      id: balance.id,
-      asset: balance.asset,
-      amount: balance.amount,
-      claimants: balance.claimants,
-      predicate: balance.predicate,
-      lastModifiedLedger: balance.last_modified_ledger,
-      lastModifiedTime: balance.last_modified_time,
-    }));
-
-    return success(res, {
-      items: claimableBalances,
-      total: claimableBalances.length,
-      cursor: response.next_cursor || null,
     });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
