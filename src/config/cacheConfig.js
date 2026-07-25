@@ -75,6 +75,12 @@ const cacheTTL = {
     process.env.CACHE_TTL_EFFECTS_MS,
     30000
   ),
+
+  /** /account/:id/transaction-count — changes only on new submissions */
+  transactionCount: msToSeconds(
+    process.env.CACHE_TTL_TX_COUNT_MS,
+    20000
+  ),
 };
 
 module.exports = cacheTTL;
