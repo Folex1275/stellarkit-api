@@ -7,13 +7,15 @@
  * env configuration.
  *
  * Environment variables (all in milliseconds):
- *   CACHE_TTL_NETWORK_STATUS_MS  — /network-status                (default: 5 000 ms)
- *   CACHE_TTL_FEE_ESTIMATE_MS    — /fee-estimate & surge-status   (default: 5 000 ms)
- *   CACHE_TTL_BASE_FEE_MS        — /network/base-fee              (default: 5 000 ms)
- *   CACHE_TTL_VALIDATORS_MS      — /network/validators            (default: 300 000 ms)
- *   CACHE_TTL_ASSET_MS           — /asset/:code/:issuer           (default: 30 000 ms)
- *   CACHE_TTL_ASSET_PRICE_MS     — /asset price endpoint          (default: 5 000 ms)
- *   CACHE_TTL_TRUSTLINES_MS      — /account/:id/trustlines        (default: 15 000 ms)
+ *   CACHE_TTL_NETWORK_STATUS_MS  — /network-status            (default: 5 000 ms)
+ *   CACHE_TTL_FEE_ESTIMATE_MS    — /fee-estimate & surge-status (default: 5 000 ms)
+ *   CACHE_TTL_BASE_FEE_MS        — /network/base-fee          (default: 5 000 ms)
+ *   CACHE_TTL_VALIDATORS_MS      — /network/validators        (default: 300 000 ms)
+ *   CACHE_TTL_ASSET_MS           — /asset/:code/:issuer       (default: 30 000 ms)
+ *   CACHE_TTL_ASSET_PRICE_MS     — /asset price endpoint      (default: 5 000 ms)
+ *   CACHE_TTL_CLAIMABLE_BALANCES_MS — /account/:id/claimable-balances (default: 20 000 ms)
+ *   CACHE_TTL_EFFECTS_MS         — /account/:id/effects          (default: 30 000 ms)
+ *   CACHE_TTL_SIGNING_KEYS_MS   — /account/:id/signing-keys     (default: 20 000 ms)
  *
  * The legacy CACHE_TTL_MS variable is still respected as a global fallback so
  * existing deployments are not broken.
@@ -63,10 +65,28 @@ const cacheTTL = {
     globalFallbackMs
   ),
 
-  /** /account/:id/trustlines — trustline data is stable; 15 s default */
-  trustlines: msToSeconds(
-    process.env.CACHE_TTL_TRUSTLINES_MS,
-    15000
+  /** /account/:id/claimable-balances — changes only on create/claim */
+  claimableBalances: msToSeconds(
+    process.env.CACHE_TTL_CLAIMABLE_BALANCES_MS,
+    20000
+  ),
+
+  /** /account/:id/effects — historical ledger effects, immutable once written */
+  effects: msToSeconds(
+    process.env.CACHE_TTL_EFFECTS_MS,
+    30000
+  ),
+
+  /** /account/:id/transaction-count — changes only on new submissions */
+  transactionCount: msToSeconds(
+    process.env.CACHE_TTL_TX_COUNT_MS,
+    20000
+  ),
+
+  /** /dex/top-markets — trade aggregation window, refresh every 60 s by default */
+  topMarkets: msToSeconds(
+    process.env.CACHE_TTL_TOP_MARKETS_MS,
+    60000
   ),
 };
 

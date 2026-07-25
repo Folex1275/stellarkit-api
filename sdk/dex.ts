@@ -78,6 +78,23 @@ export interface PriceData {
   bestPath: Array<{ assetCode: string; assetIssuer: string }>;
 }
 
+/** Standard asset shape used for market fields — `issuer` is `null` for native XLM. */
+export interface Asset {
+  code: string;
+  issuer: string | null;
+  type: "native" | "credit_alphanum4" | "credit_alphanum12";
+}
+
+/** A single market entry from GET /dex/top-markets */
+export interface Market {
+  baseAsset: Asset;
+  counterAsset: Asset;
+  baseVolume: string;
+  counterVolume: string;
+  tradeCount: number;
+  spread: string | null;
+}
+
 /**
  * Serialise an asset parameter to the "CODE:ISSUER" URL format.
  *
@@ -217,5 +234,25 @@ export class DexModule {
     const sell = serializeAsset(sellAsset);
     const buy = serializeAsset(buyAsset);
     return this._get<PriceData>(`/dex/price/${sell}/${buy}?amount=${amount}`);
+  }
+
+  /**
+   * Get the top Stellar DEX markets ranked by recent trade activity.
+   *
+   * Aggregates recent network trades into per-pair markets and returns
+   * volume, trade count, and bid-ask spread for each.
+   *
+   * @param options.limit - Maximum number of markets to return (default: 10).
+   * @returns Resolves to an array of market entries.
+   * @throws {StellarKitError} On non-2xx response.
+   *
+   * @example
+   * const dex = new DexModule({ baseUrl: "http://localhost:3000" });
+   * const markets = await dex.getTopMarkets({ limit: 5 });
+   * console.log(`${markets[0].baseAsset.code}/${markets[0].counterAsset.code}: ${markets[0].tradeCount} trades`);
+   */
+  async getTopMarkets(options: { limit?: number } = {}): Promise<Market[]> {
+    const query = options.limit !== undefined ? `?limit=${options.limit}` : "";
+    return this._get<Market[]>(`/dex/top-markets${query}`);
   }
 }

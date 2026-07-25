@@ -5,64 +5,6 @@ const { success } = require("../utils/response");
 const cacheService = require("../services/cache");
 const cacheTTL = require("../config/cacheConfig");
 
-/**
- * GET /network/base-fee
- * Returns the current Stellar network base fee from the most recent ledger.
- * Cached for 5 seconds (one ledger close interval) to avoid hammering Horizon
- * on every request while still reflecting fee changes quickly.
- *
- * Query params:
- *   ?fresh=true  — bypass the cache and fetch directly from Horizon
- *
- * Response headers:
- *   X-Cache: HIT  — served from cache
- *   X-Cache: MISS — fetched live from Horizon
- */
-router.get("/base-fee", async (req, res, next) => {
-  try {
-    const cacheKey = "network-base-fee";
-    const fresh = req.query.fresh === "true";
-
-    if (!fresh) {
-      const cached = cacheService.get(cacheKey);
-      if (cached) {
-        res.set("X-Cache", "HIT");
-        return success(res, cached);
-      }
-    }
-
-    const ledger = await server.ledgers().order("desc").limit(1).call();
-    const latest = ledger.records[0];
-
-    if (!latest) {
-      const err = new Error("Unable to fetch latest ledger from Horizon.");
-      err.status = 502;
-      return next(err);
-    }
-
-    const baseFeeStroops = parseInt(latest.base_fee_in_stroops || latest.base_fee, 10) || 0;
-
-    const data = {
-      baseFeeStroops,
-      baseFeeXLM: (baseFeeStroops / 1e7).toFixed(7),
-      ledgerSequence: latest.sequence,
-      ledgerClosedAt: latest.closed_at,
-      note: "Base fee is in stroops. 1 XLM = 10,000,000 stroops. Cached for 5 seconds.",
-    };
-
-    cacheService.set(cacheKey, data, cacheTTL.baseFee);
-
-    res.set("X-Cache", "MISS");
-    return success(res, data);
-  } catch (err) {
-    if (err.code === "ECONNREFUSED" || err.code === "ENOTFOUND" || err.cause?.code === "ECONNREFUSED") {
-      const horizonErr = new Error("Unable to fetch base fee from Horizon. Please try again.");
-      horizonErr.status = 502;
-      return next(horizonErr);
-    }
-    next(err);
-  }
-});
 
 /**
  * GET /network/validators
@@ -141,6 +83,40 @@ router.get("/validators", async (req, res, next) => {
       horizonErr.status = 502;
       return next(horizonErr);
     }
+    next(err);
+  }
+});
+
+const BASE_FEE_CACHE_TTL = 5;
+
+router.get("/base-fee", async (req, res, next) => {
+  try {
+    const cacheKey = "network-base-fee";
+    const fresh = req.query.fresh === "true";
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
+    const feeStats = await server.feeStats();
+
+    const baseFeeStroops = parseInt(feeStats.last_ledger_base_fee, 10);
+    const baseFeeXLM = (baseFeeStroops / 1e7).toFixed(7);
+    const isSurge =
+      parseFloat(feeStats.ledger_capacity_usage) > 0.5 ||
+      baseFeeStroops > parseInt(feeStats.fee_charged.min, 10);
+
+    const data = { baseFeeStroops, baseFeeXLM, isSurge };
+
+    cacheService.set(cacheKey, data, BASE_FEE_CACHE_TTL);
+
+    res.set("X-Cache", "MISS");
+    return success(res, data);
+  } catch (err) {
     next(err);
   }
 });

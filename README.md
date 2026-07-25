@@ -41,8 +41,12 @@ This project is ideal for:
 
 ## Documentation
 
+- [SDK Migration Guide](docs/sdk-migration.md) — migrating from the JavaScript SDK to the TypeScript SDK
+- [SDK README](sdk/README.md) — JavaScript client usage and method reference
 - [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
-- [API Design Guidelines](docs/api-design.md) — Explains StellarKit's response envelope, pagination conventions, asset shapes, timestamp formats, amount formats, and error structure.
+- [Error Reference](docs/error-reference.md) - All error types, status codes, and suggested fixes
+- [Rate Limiting](docs/rate-limiting.md) - Default limits, configuration, response headers, and retry strategies
+- [Frequently Asked Questions (FAQ)](FAQ.md) - Common setup and contribution questions
 
 ---
 
@@ -57,6 +61,7 @@ This project is ideal for:
 | GET | `/network-status` | Latest ledger, fees, and protocol info | `fresh` |
 | GET | `/network/ledger-timing` | Analyze ledger close time consistency | — |
 | GET | `/network/validators` | Current validator list grouped by organisation | `fresh` |
+| GET | `/network/base-fee` | Current network base fee in stroops and XLM | `fresh` |
 
 ### Fees
 
@@ -72,18 +77,23 @@ This project is ideal for:
 | GET | `/account/:id` | Account details, balances, reserve breakdown | — |
 | GET | `/account/:id/age` | Account age and longevity metrics | — |
 | GET | `/account/:id/balances` | XLM and asset balances | — |
+| GET | `/account/:id/native-balance` | Native XLM balance only | — |
 | GET | `/account/:id/sequence` | Current sequence number | — |
-| GET | `/account/:id/trustlines` | Trustlines with TOML asset metadata resolved | — |
-| GET | `/account/:id/payments` | Payment and create_account operations | `limit`, `order`, `cursor` |
+| GET | `/account/:id/trustlines` | Trustlines with TOML asset metadata resolved | `assetCode` |
+| GET | `/account/:id/payments` | Payment and create_account operations | `limit`, `order`, `cursor`, `assetCode`, `assetIssuer` |
+| GET | `/account/:id/trades` | DEX trades for the account | `limit`, `order`, `cursor`, `fresh` |
 | GET | `/account/:id/offers` | Open DEX offers for an account | `limit`, `cursor` |
 | GET | `/account/:id/offer-history` | Historical offer operations | `limit`, `order`, `cursor` |
 | GET | `/account/:id/analytics` | Basic account activity analytics | — |
+| GET | `/account/:id/transaction-count` | Total transaction count, first and last transaction timestamps | — |
 | GET | `/account/:id/inactivity` | Days since last transaction and status | — |
 | GET | `/account/:id/volume` | Transaction volume by asset over a time period | `days` |
+| GET | `/account/:id/risk-score` | Computed risk score and contributing factors | — |
 | GET | `/account/:id/freeze-status/:assetCode/:assetIssuer` | Check if an asset is frozen on an account | — |
 | GET | `/account/:id/can-receive/:assetCode/:assetIssuer` | Check if an account can receive a specific asset | — |
 | GET | `/account/:id/subentry-health` | Subentry usage and remaining capacity | — |
 | GET | `/account/:id/sponsorship` | Sponsorship relationships for the account | — |
+| GET | `/account/:id/sponsorships` | Typed sponsorship summary with sponsoredBy and sponsoring arrays | — |
 | GET | `/account/:id/pool-positions` | Liquidity pool positions and share values | — |
 | GET | `/account/:id/counterparties` | Frequent payment counterparties | — |
 | GET | `/account/:id/transactions/search` | Search transactions by memo content | `memo`, `memo_type`, `limit`, `cursor`, `order` |
@@ -117,6 +127,7 @@ This project is ideal for:
 | GET | `/dex/depth/:sellAsset/:buyAsset` | Full order book depth analysis | — |
 | GET | `/dex/imbalance/:sellAsset/:buyAsset` | Buy/sell pressure imbalance detection | — |
 | GET | `/dex/arbitrage/:assetCode/:assetIssuer` | Circular arbitrage path discovery | — |
+| GET | `/dex/top-markets` | Top markets ranked by recent trade activity | `limit` |
 
 ### Liquidity Pools
 
@@ -173,7 +184,15 @@ Soroban is Stellar’s smart contract platform for running WebAssembly (WASM) co
 
 A Soroban contract is referenced by a **contract ID**, which is the address used to invoke the contract after it has been deployed. The contract’s **WASM hash** is the digest of the compiled contract binary and uniquely identifies the contract code that is stored and executed on the network.
 
-StellarKit API currently supports Soroban contract inspection through the `/soroban/contract/:id` endpoint. This endpoint enables developers to look up contract details by contract ID, including the associated WASM hash and contract metadata, making it easier to combine traditional Stellar account workflows with Soroban contract interactions.
+StellarKit API supports Soroban contract inspection through two endpoints: `GET /soroban/contract/:id` looks up contract details by contract ID, including the associated WASM hash and ledger metadata, and `GET /soroban/contract/:id/storage` returns the contract's instance-storage entries. Together they make it easier to combine traditional Stellar account workflows with Soroban contract interactions.
+
+See [docs/soroban.md](docs/soroban.md) for a full walkthrough with curl examples and sample responses.
+
+---
+
+## Documentation
+
+- [docs/soroban.md](docs/soroban.md) — Soroban contract endpoints: what Soroban is, how contract IDs work, and how to inspect deployed contracts via `/soroban/contract/:id` and `/soroban/contract/:id/storage`.
 
 ---
 
@@ -239,10 +258,13 @@ Visit `http://localhost:3000` after startup.
 | ----------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | `STELLAR_NETWORK` | `testnet`                          | Target Stellar network. Accepted values: `testnet` or `mainnet`. Controls which Horizon server is used and gates testnet-only endpoints such as Friendbot.        | ⬜ No    |
 | `HORIZON_URL`     | _(derived from `STELLAR_NETWORK`)_ | Override the Horizon server URL. When omitted, defaults to `https://horizon-testnet.stellar.org` for `testnet` and `https://horizon.stellar.org` for `mainnet`.   | ⬜ No    |
+| `SOROBAN_RPC_URL` | _(testnet only)_                   | Soroban RPC server URL used by the `/soroban/*` endpoints. Defaults to `https://soroban-testnet.stellar.org` on testnet. No default on mainnet — must be set to use `/soroban/*` there. | ⬜ No    |
 | `PORT`            | `3000`                             | TCP port the Express server listens on.                                                                                                                           | ⬜ No    |
 | `NODE_ENV`        | `development`                      | Runtime environment. Set to `production` to enable combined HTTP logging and sanitised error messages. Set to `test` to suppress console output during test runs. | ⬜ No    |
-| `RATE_LIMIT_MAX`  | `100`                              | Maximum number of requests allowed per IP address per 15-minute window. Applies to the global rate limiter.                                                       | ⬜ No    |
+| `RATE_LIMIT_WINDOW_MS` | `900000`                       | Length of the rate-limit window, in milliseconds. See [Rate Limiting](docs/rate-limiting.md).                                                                     | ⬜ No    |
+| `RATE_LIMIT_MAX`  | `100`                              | Maximum number of requests allowed per IP address per rate-limit window. Applies to the global rate limiter.                                                      | ⬜ No    |
 | `CACHE_TTL_MS`    | `5000`                             | Cache time-to-live in milliseconds for the `/network-status` and `/fee-estimate` endpoints.                                                                       | ⬜ No    |
+| `CACHE_TTL_CONTRACT_STORAGE_MS` | `15000`               | Cache time-to-live in milliseconds for the `/soroban/contract/:id/storage` endpoint.                                                                              | ⬜ No    |
 | `REQUIRE_API_KEY` | `false`                            | Enables API key authentication. When true, clients must provide a valid API key via X-API-Key header.                                                             | ⬜ No    |
 | `API_KEYS`        | _(empty)_                          | Comma-separated list of valid API keys. Required when REQUIRE_API_KEY=true.                                                                                       | ⬜ No    |
 
@@ -495,17 +517,246 @@ Calculates a fee estimate for a transaction using the current network base fee a
 
 Fetches account details, balances, signers, thresholds, flags, and spendable balance for the given Stellar public key.
 
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+```
+
 ### `GET /account/:id/balances`
 
 Returns account balance details for XLM and all non-native assets.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/balances"
+```
+
+### `GET /account/:id/native-balance`
+
+Returns only the native XLM balance with buying and selling liabilities.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/native-balance"
+```
+
+### `GET /account/:id/sequence`
+
+Returns the current sequence number for an account.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/sequence"
+```
+
+### `GET /account/:id/age`
+
+Returns account age, creation ledger, and maturity category.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/age"
+```
+
+### `GET /account/:id/trustlines`
+
+Returns all trustlines for the account with TOML metadata resolved from the issuer's home domain. Filter by asset code with `?assetCode=`.
+
+```bash
+# All trustlines
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/trustlines"
+
+# Filter to USDC only
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/trustlines?assetCode=USDC"
+```
 
 ### `GET /account/:id/summary`
 
 Returns a compact account summary suitable for dashboards and quick views.
 
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/summary"
+```
+
 ### `GET /account/:id/payments`
 
 Lists payments and asset transfers for the account.
+
+| Param | Type | Required | Default | Description |
+| ----- | ---- | -------- | ------- | ----------- |
+| `limit` | integer | No | `20` | Maximum number of payment records to return per page. |
+| `cursor` | string | No | None | Horizon pagination cursor from a previous response. |
+| `order` | string | No | `desc` | Sort order for results: `asc` or `desc`. |
+| `assetCode` | string | No | None | Case-insensitive asset code filter that matches all issuers for that code. |
+| `assetIssuer` | string | No | None | Asset issuer filter used only when `assetCode` is also provided; by itself it has no effect. |
+
+```bash
+# Latest 20 payments
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/payments"
+
+# First 10 payments in ascending order (oldest first)
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/payments?limit=10&order=asc"
+
+# Filter to USDC payments only
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/payments?assetCode=USDC"
+
+# Paginate to the next page using a cursor
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/payments?limit=20&cursor=163305704040034305"
+```
+
+### `GET /account/:id/trades`
+
+Returns trades executed by the account on the Stellar DEX.
+
+| Param | Type | Required | Default | Description |
+| ----- | ---- | -------- | ------- | ----------- |
+| `limit` | integer | No | `20` | Maximum number of trade records to return (max: 200). |
+| `cursor` | string | No | None | Horizon pagination cursor from a previous response. |
+| `order` | string | No | `desc` | Sort direction: `asc` (oldest first) or `desc` (newest first). |
+| `fresh` | boolean | No | `false` | Set to `true` to bypass the server-side cache. |
+
+```bash
+# Latest trades (newest first)
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/trades"
+
+# Oldest trades first
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/trades?order=asc"
+
+# Paginate through trades
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/trades?limit=50&order=desc&cursor=163305704040034305"
+
+# Bypass cache for live data
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/trades?fresh=true"
+```
+
+### `GET /account/:id/offers`
+
+Returns open DEX offers for the account.
+
+```bash
+# Open offers (default limit 20)
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/offers"
+
+# Paginate with a larger limit
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/offers?limit=50"
+```
+
+### `GET /account/:id/offer-history`
+
+Returns historical offer operations (create, update, delete) for the account.
+
+```bash
+# Most recent offer history
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/offer-history"
+
+# Oldest first
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/offer-history?order=asc&limit=50"
+```
+
+### `GET /account/:id/risk-score`
+
+Returns a computed risk score and contributing factors for the account.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/risk-score"
+```
+
+### `GET /account/:id/inactivity`
+
+Returns days since the account's last transaction and a status label (`active`, `idle`, or `dormant`).
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/inactivity"
+```
+
+### `GET /account/:id/subentry-health`
+
+Returns subentry usage, remaining capacity, and a warning level when approaching the protocol limit.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/subentry-health"
+```
+
+### `GET /account/:id/sponsorship`
+
+Returns sponsorship relationships — entries on this account sponsored by others, and accounts this account is sponsoring.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/sponsorship"
+```
+
+### `GET /account/:id/sponsorships`
+
+Returns a typed sponsorship summary with `sponsoredBy` and `sponsoring` arrays. Each `sponsoredBy` entry includes a `type`, `address`, `sponsor`, and `reserveAmount`.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/sponsorships"
+```
+
+### `GET /account/:id/freeze-status/:assetCode/:assetIssuer`
+
+Checks whether a specific asset trustline is frozen or partially frozen on the account.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/freeze-status/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+```
+
+### `GET /account/:id/can-receive/:assetCode/:assetIssuer`
+
+Checks whether the account can currently receive a specific asset (trustline exists, is authorized, and has available capacity).
+
+```bash
+# Check for USDC
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/can-receive/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+
+# Check for native XLM
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/can-receive/XLM/native"
+```
+
+### `GET /account/:id/volume`
+
+Returns transaction volume broken down by asset over the last N days (default: 30, max: 90).
+
+```bash
+# Last 30 days (default)
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/volume"
+
+# Last 7 days
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/volume?days=7"
+```
+
+### `GET /account/:id/pool-positions`
+
+Returns all liquidity pool positions for the account with calculated share values and equivalent reserves.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/pool-positions"
+```
+
+### `GET /account/:id/counterparties`
+
+Returns the most frequent payment counterparties for the account.
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/counterparties"
+```
+
+### `GET /account/:id/transactions/search`
+
+Searches transaction history filtered by memo content.
+
+```bash
+# Search by text memo
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/transactions/search?memo=invoice-123"
+
+# Search by numeric ID memo
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/transactions/search?memo=987654321&memo_type=id"
+```
+
+### `POST /account/:id/multisig-plan`
+
+Calculates the minimal signer combinations needed to meet each threshold.
+
+```bash
+curl -X POST "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN/multisig-plan" \
+  -H "Content-Type: application/json" \
+  -d '{"availableSigners": ["GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"]}'
+```
 
 ### `GET /transactions/:id`
 
@@ -640,6 +891,143 @@ When an error occurs, the response structure differs:
   }
 }
 ```
+
+---
+
+## Request Tracing with X-Request-ID
+
+Every request to StellarKit API is assigned a unique identifier for tracing and debugging purposes. This header helps you correlate requests with server logs, monitor application performance, and troubleshoot issues across distributed systems.
+
+### What is X-Request-ID?
+
+The `X-Request-ID` header is a unique identifier attached to every API request. It serves three primary purposes:
+
+1. **Request Correlation**: Link requests across multiple services and systems using a common identifier.
+2. **Debugging**: Find specific requests in server logs by searching for the request ID.
+3. **Monitoring**: Track request flow through your application architecture and identify bottlenecks.
+
+### How X-Request-ID Works
+
+**If you send a custom request ID:**
+- StellarKit API uses the `X-Request-ID` value you provide in your request.
+- The same ID is returned in the response header.
+- Useful for correlating API calls with your internal logging or tracing systems.
+
+**If you don't send a request ID:**
+- StellarKit API automatically generates a UUID v4 (e.g., `550e8400-e29b-41d4-a716-446655440000`).
+- The generated ID is returned in the response header.
+- You can extract and log this ID for future reference.
+
+### Sending a Custom Request ID
+
+To send a custom request ID, include the `X-Request-ID` header in your request:
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN" \
+  -H "X-Request-ID: my-request-001"
+```
+
+The custom ID can be any non-empty string (UUID, alphanumeric, or any format you prefer).
+
+### Reading the Generated or Echoed Request ID
+
+Every response includes the `X-Request-ID` header. Extract it from the response headers to log, trace, or correlate with other systems:
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN" \
+  -i
+```
+
+Response (headers shown):
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Request-ID: 550e8400-e29b-41d4-a716-446655440000
+...
+
+{
+  "success": true,
+  "data": { ... }
+}
+```
+
+### Practical Examples
+
+#### Example 1: Send a Custom Request ID and Verify It
+
+```bash
+curl -X GET "http://localhost:3000/network-status" \
+  -H "X-Request-ID: my-health-check-001" \
+  -H "Accept: application/json"
+```
+
+Response headers:
+```http
+X-Request-ID: my-health-check-001
+```
+
+The server echoes back your custom ID, which you can log for correlation with your application logs.
+
+#### Example 2: Extract Auto-Generated Request ID from Response
+
+```bash
+curl -X GET "http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN" \
+  -s -i | grep X-Request-ID
+```
+
+Output:
+```
+X-Request-ID: a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6
+```
+
+Save this ID in your logs for debugging later.
+
+#### Example 3: Using X-Request-ID with JavaScript/Node.js
+
+```javascript
+const axios = require('axios');
+
+async function fetchAccountWithTracing() {
+  const requestId = 'my-custom-trace-' + Date.now();
+  
+  try {
+    const response = await axios.get(
+      'http://localhost:3000/account/GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN',
+      {
+        headers: {
+          'X-Request-ID': requestId
+        }
+      }
+    );
+    
+    // Extract the request ID from response headers
+    const responseRequestId = response.headers['x-request-id'];
+    console.log('Request ID:', responseRequestId);
+    console.log('Account data:', response.data);
+  } catch (error) {
+    console.error('Error:', error.message);
+  }
+}
+
+fetchAccountWithTracing();
+```
+
+### Use Cases
+
+| Use Case | Example |
+| --- | --- |
+| **Distributed tracing** | Pass the same request ID across multiple microservices to trace a user action end-to-end. |
+| **Log correlation** | Log the request ID alongside your application events, then search server logs by ID to reconstruct the full request flow. |
+| **Support debugging** | When a user reports a problem, ask for the request ID from their client and search the API logs for that ID to understand what happened. |
+| **Monitoring dashboards** | Aggregate request IDs in your monitoring system to track request latency, success rates, and error patterns over time. |
+| **Rate limiting analysis** | Use request IDs to identify which requests contributed to hitting a rate limit and when they occurred. |
+
+### Best Practices
+
+- **Always log the request ID**: Include the `X-Request-ID` from the response in your application logs. This makes troubleshooting significantly easier.
+- **Use meaningful custom IDs**: If you send a custom request ID, use a format that makes sense in your logging context (e.g., `user-123-action-456`).
+- **Correlate across services**: In a microservices architecture, propagate the same `X-Request-ID` to downstream API calls so you can trace the entire flow.
+- **Attach to error reports**: When reporting bugs or API errors, always include the `X-Request-ID` so engineers can look up the exact request in the logs.
 
 ---
 
@@ -1652,6 +2040,13 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting.
 
 ---
 
+## 👥 Community
+
+- [Contributors](CONTRIBUTORS.md) — See everyone who has contributed to StellarKit API
+- [Code of Conduct](CODE_OF_CONDUCT.md) — Our community standards
+
+---
+
 ## 📁 Project Structure
 
 ```
@@ -1729,6 +2124,12 @@ Path payments are useful because:
 **Asset format for DEX endpoints:** `CODE:ISSUER` — for example `USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`. Use `XLM:native` for the native asset.
 
 These endpoints wrap Horizon's order book and path-finding APIs, normalizing the responses into the standard StellarKit envelope so you get consistent `success`, `data`, and `error` fields across all calls.
+
+---
+
+## 🗺️ Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for the project's planned direction across near-term, medium-term, and long-term horizons — including upcoming endpoints, SDK milestones, and ecosystem integrations.
 
 ---
 

@@ -50,8 +50,9 @@ describe("Account Freeze Status API", () => {
         expect(res.body.data).toEqual({
             accountId,
             asset: {
-                assetCode: "USD",
-                assetIssuer: issuerPublicKey,
+                code: "USD",
+                issuer: issuerPublicKey,
+                type: "credit_alphanum4",
             },
             isFrozen: false,
             isPartiallyFrozen: false,
@@ -115,7 +116,7 @@ describe("Account Freeze Status API", () => {
 
         expect(res.statusCode).toBe(400);
         expect(res.body.success).toBe(false);
-        expect(res.body.error.type).toBe("ValidationError");
+        expect(res.body.error.type).toBe("InvalidAccountId");
     });
 
     it("returns 400 for invalid asset code", async () => {

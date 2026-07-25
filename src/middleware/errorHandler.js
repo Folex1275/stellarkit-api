@@ -7,6 +7,11 @@ const logger = require("../utils/logger");
 const { translateHorizonError } = require("../utils/horizonErrors");
 const { mapHorizonErrorToStatus } = require("../utils/horizonStatusMapper");
 const StellarKitError = require("../utils/StellarKitError");
+const {
+  HORIZON_TIMEOUT_MESSAGE,
+  HORIZON_TIMEOUT_SUGGESTION,
+  isHorizonTimeoutError,
+} = require("../utils/errors");
 
 /**
  * Logs 4xx and 5xx responses using the structured logger.
@@ -33,12 +38,51 @@ function logError(status, req, message) {
   }
 }
 
+const ACCOUNT_MERGE_FAILURES = {
+  op_does_not_exist: {
+    message: "Account merge failed because the destination account does not exist.",
+    suggestion:
+      "Use an existing funded destination account (G...) before retrying the merge.",
+  },
+  op_malformed: {
+    message: "Account merge failed because the operation payload is malformed.",
+    suggestion:
+      "Check source/destination values and rebuild the transaction with a valid accountMerge operation.",
+  },
+  op_dest_full: {
+    message: "Account merge failed because the destination account cannot accept additional reserves or entries.",
+    suggestion:
+      "Free capacity on the destination account (remove subentries or use a different destination) and try again.",
+  },
+};
+
+function isMergePath(pathname) {
+  if (!pathname || typeof pathname !== "string") return false;
+  return pathname.toLowerCase().includes("merge");
+}
+
 function errorHandler(err, req, res, next) {
   // Horizon errors returned from horizon-client / Stellar SDK
   if (err && err.response && err.response.data) {
     const horizonError = err.response.data;
     const extras = horizonError.extras !== undefined ? horizonError.extras : null;
 
+    const resultCode = pickMostSpecificResultCode(horizonError?.extras?.result_codes);
+
+    const mappedStatus = mapHorizonErrorToStatus(resultCode);
+    const status = mappedStatus ?? err.response.status ?? 400;
+
+    if (isTransactionSubmissionFailure(horizonError)) {
+      const body = buildTransactionSubmissionFailedError(horizonError);
+      logError(status, req, body.message);
+      return res.status(status).json({ success: false, error: body });
+    }
+
+    const message = horizonError.detail || horizonError.title || "Horizon Error";
+    const code = resultCode;
+    const humanMessage = code ? translateHorizonError(code) : null;
+    logError(status, req, message);
+    return res.status(status).json({
     let resultCode = null;
     if (extras && extras.result_codes) {
       if (typeof extras.result_codes.transaction === "string") {
@@ -51,9 +95,11 @@ function errorHandler(err, req, res, next) {
       }
     }
 
+    const code = resultCode;
+    const humanMessage = translateHorizonError(resultCode);
     const mappedStatus = mapHorizonErrorToStatus(resultCode);
     const httpStatus = mappedStatus ?? err.response.status ?? 400;
-
+   
     const body = {
       success: false,
       error: {
@@ -85,7 +131,20 @@ function errorHandler(err, req, res, next) {
       error: err.toJSON(),
     });
   }
-
+  // ReferenceError and TypeError — catch runtime exceptions
+  if (err instanceof ReferenceError || err instanceof TypeError) {
+    logError(500, req, err.message);
+    return res.status(500).json({
+      success: false,
+      error: {
+        type: "InternalError",
+        title: "Internal Server Error",
+        detail: process.env.NODE_ENV === "production"
+          ? "An unexpected error occurred."
+          : err.message,
+      },
+    });
+  }
   // Payload too large errors from body parsers
   if (err.type === "entity.too.large" || err.status === 413) {
     const maxBodySize = process.env.MAX_BODY_SIZE || "10kb";
@@ -131,6 +190,21 @@ function errorHandler(err, req, res, next) {
     });
   }
 
+  // InvalidAccountId errors — thrown by validateAccountId(id)
+  if (err.isInvalidAccountId) {
+    logError(400, req, err.message);
+    return res.status(400).json({
+      success: false,
+      error: {
+        type: "InvalidAccountId",
+        message: err.message,
+        suggestion:
+          err.suggestion ||
+          "Account addresses start with G and are 56 characters long.",
+      },
+    });
+  }
+
   // InvalidAsset errors — thrown by validateAsset(code, issuer)
   if (err.isInvalidAsset) {
     logError(400, req, err.message);
@@ -140,6 +214,58 @@ function errorHandler(err, req, res, next) {
         type: "InvalidAsset",
         message: err.message,
         suggestion: err.suggestion || null,
+      },
+    });
+  }
+
+  // InvalidLimit errors — thrown by validateLimit()
+  if (err.isInvalidLimit) {
+    logError(400, req, err.message);
+    return res.status(400).json({
+      success: false,
+      error: {
+        type: "InvalidLimit",
+        message: "limit must be a number between 1 and 100.",
+        suggestion: "Provide a valid integer for the limit parameter, e.g. ?limit=20",
+      },
+    });
+  }
+
+  // Horizon timeout errors (Horizon node did not respond in time)
+  if (isHorizonTimeoutError(err)) {
+    logError(504, req, HORIZON_TIMEOUT_MESSAGE);
+    return res.status(504).json({
+      success: false,
+      error: {
+        type: "HorizonTimeout",
+        message: HORIZON_TIMEOUT_MESSAGE,
+        suggestion: HORIZON_TIMEOUT_SUGGESTION,
+      },
+    });
+  }
+
+  // Transaction not found errors
+  if (err.isTransactionNotFound) {
+    logError(404, req, err.message);
+    return res.status(404).json({
+      success: false,
+      error: {
+        type: "NotFound",
+        message: err.message,
+        suggestion: "Verify the transaction hash is correct.",
+      },
+    });
+  }
+
+  // Offer not found errors
+  if (err.isOfferNotFound) {
+    logError(404, req, err.message);
+    return res.status(404).json({
+      success: false,
+      error: {
+        type: "OfferNotFound",
+        message: err.message,
+        suggestion: err.suggestion,
       },
     });
   }

@@ -1,5 +1,55 @@
 const { StrKey } = require("@stellar/stellar-sdk");
 
+/**
+ * Build a query-parameter error message in the form "Query parameter '<field>': <detail>".
+ * @param {string} field
+ * @param {string} detail
+ * @returns {string}
+ */
+function qp(field, detail) {
+  return `Query parameter '${field}': ${detail}`;
+}
+
+/**
+ * Creates a structured InvalidAccountId error.
+ * @param {string} accountId
+ * @returns {Error}
+ */
+function makeInvalidAccountIdError(accountId) {
+  const err = new Error(
+    `"${String(accountId).slice(0, 60)}" is not a valid Stellar account address.`
+  );
+  err.isInvalidAccountId = true;
+  err.accountId = accountId;
+  err.suggestion = "Account addresses start with G and are 56 characters long.";
+  err.status = 400;
+  return err;
+}
+
+/**
+ * Creates a structured InvalidAsset error.
+ * @param {string} message
+ * @param {string} suggestion
+ * @returns {Error}
+ */
+function makeInvalidAssetError(message, suggestion) {
+  const err = new Error(message);
+  err.isInvalidAsset = true;
+  err.suggestion = suggestion || null;
+  err.status = 400;
+  return err;
+}
+
+/**
+ * Create a structured validation error for invalid input.
+ *
+ * @param {string} message - Human-readable error message.
+ * @param {string} field - Name of the field that failed validation.
+ * @param {*} receivedValue - Value supplied by the caller.
+ * @param {string} expectedFormat - Expected format description for the field.
+ * @returns {Error} A validation error with metadata for API error handling.
+ * @throws {Error} Always throws an Error instance populated with validation metadata.
+ */
 function makeValidationError(message, field, receivedValue, expectedFormat) {
   const err = new Error(message);
   err.isValidation = true;
@@ -9,37 +59,45 @@ function makeValidationError(message, field, receivedValue, expectedFormat) {
   return err;
 }
 
-function makeInvalidAssetError(message, suggestion) {
-  const err = new Error(message);
-  err.isInvalidAsset = true;
-  err.suggestion = suggestion || null;
-  return err;
-}
-
-function qp(field, details) {
-  // Keep a consistent template for query validation errors.
-  return `Query parameter '${field}' ${details}`;
-}
-
+/**
+ * Validate a Stellar account ID and ensure it is a valid Ed25519 public key.
+ *
+ * @param {string} accountId - The Stellar public key to validate.
+ * @returns {void} Returns nothing when validation succeeds.
+ * @throws {Error} Throws a validation error when the account ID is missing or invalid.
+ */
 function validateAccountId(accountId) {
-  if (!accountId) {
+  if (typeof accountId !== "string" || !StrKey.isValidEd25519PublicKey(accountId)) {
+    throw makeInvalidAccountIdError(accountId);
+  }
+}
+
+function validateContractId(contractId) {
+  if (!contractId) {
     throw makeValidationError(
-      qp("accountId", "is required."),
-      "accountId",
-      accountId,
-      "G... (valid Ed25519 public key)"
+      "Contract ID is required.",
+      "contractId",
+      contractId,
+      "C... (valid Soroban contract address)"
     );
   }
-  if (!StrKey.isValidEd25519PublicKey(accountId)) {
+  if (!StrKey.isValidContract(contractId)) {
     throw makeValidationError(
-      qp("accountId", 'must be a valid Ed25519 public key starting with "G".'),
-      "accountId",
-      accountId,
-      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+      `Invalid Soroban contract ID. Must be a valid contract address starting with "C".`,
+      "contractId",
+      contractId,
+      "CCJZ5DGASBWQXR5MPFCJXMBI333XE5U3FSJTNQU7RIKE3P5GN2K2WYD2"
     );
   }
 }
 
+/**
+ * Validate an asset code and ensure it matches the expected Stellar format.
+ *
+ * @param {string} code - The asset code to validate.
+ * @returns {void} Returns nothing when validation succeeds.
+ * @throws {Error} Throws a validation error when the asset code is missing or invalid.
+ */
 function validateAssetCode(code) {
   if (!code) {
     throw makeValidationError(
@@ -59,24 +117,42 @@ function validateAssetCode(code) {
   }
 }
 
+/**
+ * Validate a numeric limit value and ensure it falls within the allowed range.
+ *
+ * Throws an error with `isInvalidLimit = true` and the standardised
+ * { type: "InvalidLimit", message, suggestion } shape when invalid.
+ *
+ * @param {number|string} limit - The requested limit value to validate.
+ * @param {number} [max=100] - Maximum allowable limit value.
+ * @returns {number} The parsed limit as an integer when valid.
+ * @throws {Error} Throws an InvalidLimit error when the limit is non-numeric, <= 0, or > max.
+ */
 function validateLimit(limit, max = 100) {
-  const parsed = parseInt(limit);
+  const parsed = parseInt(limit, 10);
   if (isNaN(parsed) || parsed < 1 || parsed > max) {
-    throw makeValidationError(
-      qp("limit", `must be between 1 and ${max}.`),
-      "limit",
-      limit,
-      `1–${max}`
-    );
+    const err = new Error("limit must be a number between 1 and 100.");
+    err.isInvalidLimit = true;
+    err.status = 400;
+    err.receivedValue = limit !== undefined ? String(limit).slice(0, 50) : undefined;
+    throw err;
   }
   return parsed;
 }
 
+/**
+ * Validate an ordering parameter and normalize it to the supported values.
+ *
+ * @param {string} [order] - The requested sort direction.
+ * @returns {string} The normalized order value, either "asc" or "desc".
+ * @throws {Error} Throws a validation error when the order value is unsupported.
+ */
 function validateOrder(order) {
   if (!order) return "desc";
   const lowerOrder = String(order).toLowerCase();
   if (!["asc", "desc"].includes(lowerOrder)) {
     throw makeValidationError(
+      `Invalid order parameter: "${order}". Valid values are "asc" or "desc".`,
       qp("order", 'must be either "asc" or "desc".'),
       "order",
       order,
@@ -86,6 +162,7 @@ function validateOrder(order) {
   return lowerOrder;
 }
 
+module.exports = { validateAccountId, validateContractId, validateAssetCode, validateLimit, validateOrder };
 /**
  * Validates a Stellar asset defined by a code and issuer route parameter pair.
  *
