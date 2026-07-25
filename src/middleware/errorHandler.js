@@ -240,6 +240,19 @@ function errorHandler(err, req, res, next) {
     });
   }
 
+  // InvalidLimit errors — thrown by validateLimit()
+  if (err.isInvalidLimit) {
+    logError(400, req, err.message);
+    return res.status(400).json({
+      success: false,
+      error: {
+        type: "InvalidLimit",
+        message: "limit must be a number between 1 and 100.",
+        suggestion: "Provide a valid integer for the limit parameter, e.g. ?limit=20",
+      },
+    });
+  }
+
   // Horizon timeout errors (Horizon node did not respond in time)
   if (isHorizonTimeoutError(err)) {
     logError(504, req, HORIZON_TIMEOUT_MESSAGE);
