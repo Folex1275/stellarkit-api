@@ -7,6 +7,8 @@ const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
 const { validateAssetCode, validateAccountId, validateAsset } = require("../utils/validators");
 const { parseStellarAsset } = require("../utils/asset");
+const cacheService = require("../services/cache");
+const cacheTTL = require("../config/cacheConfig");
 
 /**
  * GET /dex/arbitrage/:assetCode/:assetIssuer
@@ -450,6 +452,201 @@ router.get("/price/:sellAsset/:buyAsset", async (req, res, next) => {
         error: { type: "NotFound", message: "No payment path exists between these two assets." },
       });
     }
+    next(err);
+  }
+});
+
+/**
+ * Converts a Horizon asset record (from a trade) into the standard
+ * { code, issuer, type } shape used across this API.
+ *
+ * @param {string} type   - asset_type field from Horizon (e.g. "native", "credit_alphanum4")
+ * @param {string} code   - asset_code field (undefined for native XLM)
+ * @param {string} issuer - asset_issuer field (undefined for native XLM)
+ * @returns {{ code: string, issuer: string|null, type: string }}
+ */
+function formatAsset(type, code, issuer) {
+  if (type === "native") {
+    return { code: "XLM", issuer: null, type: "native" };
+  }
+  return {
+    code: code || "",
+    issuer: issuer || null,
+    type: type || "credit_alphanum4",
+  };
+}
+
+/**
+ * Builds a stable string key for a trading pair regardless of direction.
+ * Alphabetical ordering ensures XLM/USDC and USDC/XLM map to the same key.
+ */
+function pairKey(baseType, baseCode, baseIssuer, counterType, counterCode, counterIssuer) {
+  const a = baseType === "native" ? "XLM:native" : `${baseCode}:${baseIssuer}`;
+  const b = counterType === "native" ? "XLM:native" : `${counterCode}:${counterIssuer}`;
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+/**
+ * GET /dex/top-markets?limit=10
+ * Returns the top Stellar DEX trading pairs ranked by 24-hour base-asset volume.
+ *
+ * Query params:
+ *   - limit  (number, 1–50, default: 10)
+ *
+ * Response shape:
+ *   { success: true, data: { markets: [...], total } }
+ *
+ * Each market entry:
+ *   {
+ *     baseAsset:     { code, issuer, type },
+ *     counterAsset:  { code, issuer, type },
+ *     baseVolume:    "1234567.0000000",
+ *     counterVolume: "1234567.0000000",
+ *     tradeCount:    42,
+ *     spread:        "0.0012345" | null   // null when no live order book
+ *   }
+ *
+ * Strategy:
+ *   Horizon has no single "top markets by volume" endpoint. We fetch the most
+ *   recent 200 trades (the practical maximum for a single page), aggregate
+ *   volume client-side per pair, rank by baseVolume descending, then enrich
+ *   the top-N results with a live order book call to compute the bid-ask spread.
+ *
+ * @example
+ * GET /dex/top-markets?limit=5
+ */
+router.get("/top-markets", async (req, res, next) => {
+  try {
+    // ── 1. Validate limit ────────────────────────────────────────────────────
+    const MAX_LIMIT = 50;
+    const DEFAULT_LIMIT = 10;
+    const rawLimit = req.query.limit;
+
+    let limit = DEFAULT_LIMIT;
+    if (rawLimit !== undefined) {
+      const parsed = parseInt(rawLimit, 10);
+      if (isNaN(parsed) || parsed < 1) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            type: "ValidationError",
+            message: "limit must be a positive integer between 1 and 50.",
+          },
+        });
+      }
+      limit = Math.min(parsed, MAX_LIMIT);
+    }
+
+    // ── 2. Cache check ───────────────────────────────────────────────────────
+    const cacheKey = `dex:top-markets:${limit}`;
+    const cached = cacheService.get(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      return success(res, cached);
+    }
+    res.set("X-Cache", "MISS");
+
+    // ── 3. Fetch recent trades from Horizon ──────────────────────────────────
+    // Horizon's /trades endpoint returns the most recent trades across all
+    // pairs. We request 200 records (the Horizon max per page) to give the
+    // aggregation enough data to surface the busiest pairs.
+    const tradesResponse = await server
+      .trades()
+      .order("desc")
+      .limit(200)
+      .call();
+
+    const trades = tradesResponse.records || [];
+
+    // ── 4. Aggregate volume per pair ─────────────────────────────────────────
+    const pairMap = new Map();
+
+    for (const trade of trades) {
+      const key = pairKey(
+        trade.base_asset_type,
+        trade.base_asset_code,
+        trade.base_asset_issuer,
+        trade.counter_asset_type,
+        trade.counter_asset_code,
+        trade.counter_asset_issuer,
+      );
+
+      if (!pairMap.has(key)) {
+        pairMap.set(key, {
+          baseAsset: formatAsset(
+            trade.base_asset_type,
+            trade.base_asset_code,
+            trade.base_asset_issuer,
+          ),
+          counterAsset: formatAsset(
+            trade.counter_asset_type,
+            trade.counter_asset_code,
+            trade.counter_asset_issuer,
+          ),
+          baseVolume: 0,
+          counterVolume: 0,
+          tradeCount: 0,
+        });
+      }
+
+      const entry = pairMap.get(key);
+      entry.baseVolume += parseFloat(trade.base_amount || "0");
+      entry.counterVolume += parseFloat(trade.counter_amount || "0");
+      entry.tradeCount += 1;
+    }
+
+    // ── 5. Rank by baseVolume descending, take top `limit` ──────────────────
+    const ranked = Array.from(pairMap.values())
+      .sort((a, b) => b.baseVolume - a.baseVolume)
+      .slice(0, limit);
+
+    // ── 6. Enrich with live spread (parallel order book calls) ───────────────
+    const withSpread = await Promise.all(
+      ranked.map(async (market) => {
+        let spread = null;
+        try {
+          const selling =
+            market.baseAsset.type === "native"
+              ? Asset.native()
+              : new Asset(market.baseAsset.code, market.baseAsset.issuer);
+
+          const buying =
+            market.counterAsset.type === "native"
+              ? Asset.native()
+              : new Asset(market.counterAsset.code, market.counterAsset.issuer);
+
+          const ob = await server.orderbook(selling, buying).limit(1).call();
+          const bestBid = ob.bids && ob.bids.length > 0 ? parseFloat(ob.bids[0].price) : null;
+          const bestAsk = ob.asks && ob.asks.length > 0 ? parseFloat(ob.asks[0].price) : null;
+
+          if (bestBid !== null && bestAsk !== null) {
+            spread = (bestAsk - bestBid).toFixed(7);
+          }
+        } catch (_) {
+          // Order book unavailable for this pair — spread stays null
+        }
+
+        return {
+          baseAsset: market.baseAsset,
+          counterAsset: market.counterAsset,
+          baseVolume: market.baseVolume.toFixed(7),
+          counterVolume: market.counterVolume.toFixed(7),
+          tradeCount: market.tradeCount,
+          spread,
+        };
+      }),
+    );
+
+    // ── 7. Build response and cache ──────────────────────────────────────────
+    const data = {
+      markets: withSpread,
+      total: withSpread.length,
+    };
+
+    cacheService.set(cacheKey, data, cacheTTL.topMarkets);
+
+    return success(res, data);
+  } catch (err) {
     next(err);
   }
 });

@@ -499,6 +499,12 @@ app.get("/", (req, res) => {
         },
         {
           method: "GET",
+          path: "/dex/top-markets",
+          description:
+            "Top DEX trading pairs by volume with spread (optional ?limit=, default 10, max 50)",
+        },
+        {
+          method: "GET",
           path: "/liquidity-pools/:id/reserve-ratio",
           description:
             "Get reserve ratio and drift from equal for a liquidity pool",
