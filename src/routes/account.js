@@ -14,6 +14,12 @@ registerParamValidation(router);
 const { buildAccountAgeResponse } = require("../utils/accountAge");
 const { validateEffectType } = require("../utils/effectTypes");
 const axios = require("axios");
+const { Asset } = require("@stellar/stellar-sdk");
+const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
+
+const { getAssetMetadataFromToml } = require("../utils/tomlResolver");
+const { formatBalance } = require("../utils/formatBalance");
+
 const cacheTTL = require("../config/cacheConfig");
 
 // Cache TTL for account endpoint responses (in seconds)
@@ -102,9 +108,7 @@ function formatAccountBalances(account) {
   const assets = (account.balances || [])
     .filter((b) => b.asset_type !== "native")
     .map((b) => ({
-      assetCode: b.asset_code,
-      assetIssuer: b.asset_issuer,
-      assetType: b.asset_type,
+      asset: normalizeAsset(b.asset_code, b.asset_issuer, b.asset_type),
       balance: b.balance,
       limit: b.limit,
       buyingLiabilities: b.buying_liabilities,
@@ -483,6 +487,26 @@ router.get("/:id/payments", async (req, res, next) => {
       }
     }
 
+    const payments = rawRecords.map((op) => {
+      const isPayment = op.type === "payment";
+      const assetCode = isPayment ? op.asset_code || "XLM" : "XLM";
+      const assetIssuer = isPayment ? op.asset_issuer || null : null;
+      const assetType = isPayment ? op.asset_type || "native" : "native";
+      return {
+        paymentId: op.id,
+        from: isPayment ? op.from : op.funder,
+        to: isPayment ? op.to : op.account,
+        asset: normalizeAsset(
+          assetCode === "XLM" ? "XLM" : assetCode,
+          assetIssuer,
+          assetType,
+        ),
+        amount: isPayment ? op.amount : op.starting_balance,
+        createdAt: toISOTimestamp(op.created_at),
+        transactionHash: op.transaction_hash,
+      };
+    });
+
     const lastRecord = rawRecords[rawRecords.length - 1];
     const nextCursor = lastRecord ? lastRecord.paging_token : null;
 
@@ -532,14 +556,10 @@ router.get("/:id/trades", async (req, res, next) => {
       tradeType: trade.base_is_seller ? "sell" : "buy",
       baseAccount: trade.base_account,
       baseAmount: trade.base_amount,
-      baseAssetType: trade.base_asset_type,
-      baseAssetCode: trade.base_asset_code || "XLM",
-      baseAssetIssuer: trade.base_asset_issuer || null,
+      baseAsset: normalizeAsset(trade.base_asset_code, trade.base_asset_issuer, trade.base_asset_type),
       counterAccount: trade.counter_account,
       counterAmount: trade.counter_amount,
-      counterAssetType: trade.counter_asset_type,
-      counterAssetCode: trade.counter_asset_code || "XLM",
-      counterAssetIssuer: trade.counter_asset_issuer || null,
+      counterAsset: normalizeAsset(trade.counter_asset_code, trade.counter_asset_issuer, trade.counter_asset_type),
       priceNumerator: trade.price?.n || null,
       priceDenominator: trade.price?.d || null,
       baseIsSeller: trade.base_is_seller === true,
@@ -598,13 +618,8 @@ router.get("/:id/offers", async (req, res, next) => {
 
     const offerResponse = await query.call();
     const offers = (offerResponse.records || []).map((offer) => {
-      // Normalise asset fields to a consistent camelCase shape.
-      const buildAsset = (assetType, assetCode, assetIssuer) => {
-        if (assetType === "native") {
-          return { assetType: "native", assetCode: "XLM", assetIssuer: null };
-        }
-        return { assetType, assetCode, assetIssuer };
-      };
+      const buildAsset = (assetType, assetCode, assetIssuer) =>
+        normalizeAsset(assetCode, assetIssuer, assetType);
 
       // Derive a single decimal price string from price_r (n/d fraction) when
       // available, falling back to the pre-computed price string from Horizon.
@@ -702,24 +717,32 @@ router.get("/:id/effects", async (req, res, next) => {
     const response = await query.call();
     const records = response.records || [];
 
-    const items = records.map((effect) => ({
-      id: effect.id,
-      type: effect.type,
-      account: effect.account,
-      createdAt: toISOTimestamp(effect.created_at),
-      pagingToken: effect.paging_token,
-      transactionHash: effect.transaction_hash || null,
-      asset: effect.asset || null,
-      amount: effect.amount || null,
-      balance: effect.balance || null,
-      startingBalance: effect.starting_balance || null,
-      limit: effect.limit || null,
-      seller: effect.seller || null,
-      offerId: effect.offer_id || null,
-      trustor: effect.trustor || null,
-      trustee: effect.trustee || null,
-      lastModifiedLedger: effect.last_modified_ledger || null,
-    }));
+    const items = records.map((effect) => {
+      let normalizedAsset = null;
+      if (effect.asset) {
+        normalizedAsset = effect.asset;
+      } else if (effect.asset_type) {
+        normalizedAsset = normalizeAsset(effect.asset_code, effect.asset_issuer, effect.asset_type);
+      }
+      return {
+        id: effect.id,
+        type: effect.type,
+        account: effect.account,
+        createdAt: toISOTimestamp(effect.created_at),
+        pagingToken: effect.paging_token,
+        transactionHash: effect.transaction_hash || null,
+        asset: normalizedAsset,
+        amount: effect.amount || null,
+        balance: effect.balance || null,
+        startingBalance: effect.starting_balance || null,
+        limit: effect.limit || null,
+        seller: effect.seller || null,
+        offerId: effect.offer_id || null,
+        trustor: effect.trustor || null,
+        trustee: effect.trustee || null,
+        lastModifiedLedger: effect.last_modified_ledger || null,
+      };
+    });
 
     const nextCursor =
       records.length > 0 ? records[records.length - 1].paging_token : null;
@@ -849,7 +872,7 @@ router.get("/:id/claimable-balances", async (req, res, next) => {
 
       const balanceEntry = {
         id: balance.id,
-        asset: balance.asset,
+        asset: normalizeAssetFromString(balance.asset),
         amount: balance.amount,
         sponsor: balance.sponsor || null,
         lastModifiedLedger: balance.last_modified_ledger,
@@ -1317,10 +1340,7 @@ router.get("/:id/sponsorship", async (req, res, next) => {
       if (b.sponsor) {
         sponsoredEntries.push({
           type: "trustline",
-          asset:
-            b.asset_type === "native"
-              ? "XLM"
-              : `${b.asset_code}:${b.asset_issuer}`,
+          asset: normalizeAsset(b.asset_code, b.asset_issuer, b.asset_type),
           sponsor: b.sponsor,
           reserveAmount,
         });
@@ -1479,10 +1499,11 @@ router.get(
 
       return success(res, {
         accountId: account.id,
-        asset: {
-          assetCode: normalizedAssetCode,
-          assetIssuer: normalizedAssetCode === "XLM" ? "native" : assetIssuer,
-        },
+        asset: normalizeAsset(
+          normalizedAssetCode,
+          normalizedAssetCode === "XLM" ? null : assetIssuer,
+          normalizedAssetCode === "XLM" ? "native" : undefined,
+        ),
         isFrozen,
         isPartiallyFrozen,
         canSend,
@@ -1636,7 +1657,7 @@ router.get(
       if (normalizedAssetCode === "XLM") {
         return success(res, {
           accountId: account.id,
-          asset: { assetCode: "XLM", assetIssuer: "native" },
+          asset: normalizeAsset("XLM", null, "native"),
           canReceive: true,
           reasons: [],
           trustlineExists: true,
@@ -1660,7 +1681,7 @@ router.get(
       if (!trustline) {
         return success(res, {
           accountId: account.id,
-          asset: { assetCode: normalizedAssetCode, assetIssuer },
+          asset: normalizeAsset(normalizedAssetCode, assetIssuer, undefined),
           canReceive: false,
           reasons: ["No trustline exists for this asset."],
           trustlineExists: false,
@@ -1694,7 +1715,7 @@ router.get(
 
       return success(res, {
         accountId: account.id,
-        asset: { assetCode: normalizedAssetCode, assetIssuer },
+        asset: normalizeAsset(normalizedAssetCode, assetIssuer, undefined),
         canReceive,
         reasons,
         trustlineExists: true,
@@ -1765,8 +1786,7 @@ router.get("/:id/volume", async (req, res, next) => {
 
         if (!volumeMap[assetKey]) {
           volumeMap[assetKey] = {
-            assetCode,
-            assetIssuer,
+            asset: normalizeAsset(assetCode, assetIssuer, op.asset_type || undefined),
             totalSent: 0,
             totalReceived: 0,
           };
@@ -1786,8 +1806,7 @@ router.get("/:id/volume", async (req, res, next) => {
     }
 
     const volumeByAsset = Object.values(volumeMap).map((v) => ({
-      assetCode: v.assetCode,
-      assetIssuer: v.assetIssuer,
+      asset: v.asset,
       totalSent: v.totalSent.toFixed(7),
       totalReceived: v.totalReceived.toFixed(7),
     }));
@@ -1832,23 +1851,18 @@ router.get("/:id/offer-history", async (req, res, next) => {
         else if (parseFloat(op.amount) === 0) offerType = "deleted";
         else offerType = op.offer_id === "0" ? "created" : "updated";
 
-        const formatAsset = (type, code, issuer) => {
-          if (type === "native") return "XLM";
-          return `${code}:${issuer}`;
-        };
-
         return {
           offerId: op.offer_id,
           type: offerType,
-          sellingAsset: formatAsset(
-            op.selling_asset_type,
+          sellingAsset: normalizeAsset(
             op.selling_asset_code,
             op.selling_asset_issuer,
+            op.selling_asset_type,
           ),
-          buyingAsset: formatAsset(
-            op.buying_asset_type,
+          buyingAsset: normalizeAsset(
             op.buying_asset_code,
             op.buying_asset_issuer,
+            op.buying_asset_type,
           ),
           amount: op.amount,
           price: op.price,
@@ -1934,12 +1948,12 @@ router.get("/:id/pool-positions", async (req, res, next) => {
         sharePercent: sharePercent.toFixed(4),
         totalPoolShares: totalShares.toFixed(7),
         reserveA: {
-          asset: reserveA.asset,
+          asset: normalizeAssetFromString(reserveA.asset),
           totalAmount: parseFloat(reserveA.amount).toFixed(7),
           equivalentAmount: equivalentReserveA.toFixed(7),
         },
         reserveB: {
-          asset: reserveB.asset,
+          asset: normalizeAssetFromString(reserveB.asset),
           totalAmount: parseFloat(reserveB.amount).toFixed(7),
           equivalentAmount: equivalentReserveB.toFixed(7),
         },

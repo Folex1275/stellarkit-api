@@ -14,6 +14,7 @@ const { validateAccountId, validateAssetCode, validateAsset, validateLimit } = r
 const { parsePaginationParams } = require("../utils/pagination");
 const { makeAssetNotFoundError } = require("../utils/errors");
 const cacheTTL = require("../config/cacheConfig");
+const { normalizeAsset } = require("../utils/asset");
 router.use(normalizeAssetCode);
 
 const DEFAULT_ASSET_HOLDERS_CACHE_TTL_MS = 30000;
@@ -180,9 +181,7 @@ router.get("/:code/:issuer", async (req, res, next) => {
     }
 
     const data = {
-      assetCode: asset.asset_code,
-      assetIssuer: asset.asset_issuer,
-      assetType: asset.asset_type,
+      asset: normalizeAsset(asset.asset_code, asset.asset_issuer, asset.asset_type),
       amount: asset.amount,
       numAccounts: asset.num_accounts,
       numClaimableBalances: asset.num_claimable_balances,
@@ -400,9 +399,7 @@ router.get("/search", async (req, res, next) => {
       .call();
 
     const assets = assetsResponse.records.map((a) => ({
-      assetCode: a.asset_code,
-      assetIssuer: a.asset_issuer,
-      assetType: a.asset_type,
+      asset: normalizeAsset(a.asset_code, a.asset_issuer, a.asset_type),
       amount: a.amount,
       numAccounts: a.num_accounts,
       flags: a.flags,
@@ -544,8 +541,7 @@ router.get("/:code/:issuer/price", async (req, res, next) => {
     );
 
     const data = {
-      assetCode,
-      assetIssuer: issuer,
+      asset: normalizeAsset(assetCode, issuer, "credit_alphanum4"),
       priceInXlm: best.destination_amount,
       sourceAmount: best.source_amount,
       quoteAsset: "XLM",
