@@ -4,6 +4,7 @@ const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
 const { Asset } = require("@stellar/stellar-sdk");
 const { server, NETWORK } = require("../config/stellar");
+const cacheService = require("../services/cache");
 const { success } = require("../utils/response");
 const { formatBalance } = require("../utils/formatBalance");
 const cacheService = require("../services/cache");
@@ -12,7 +13,6 @@ const normalizeAssetCode = require("../middleware/normalizeAssetCode");
 const { validateAccountId, validateAssetCode, validateAsset, validateLimit } = require("../utils/validators");
 const { parsePaginationParams } = require("../utils/pagination");
 const { makeAssetNotFoundError } = require("../utils/errors");
-const cacheService = require("../services/cache");
 const cacheTTL = require("../config/cacheConfig");
 router.use(normalizeAssetCode);
 

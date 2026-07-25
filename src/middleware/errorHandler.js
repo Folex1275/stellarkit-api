@@ -95,20 +95,8 @@ function errorHandler(err, req, res, next) {
       }
     }
 
-    const mergeFailure = resultCode ? ACCOUNT_MERGE_FAILURES[resultCode] : null;
-    if (mergeFailure && isMergePath(req.path)) {
-      logError(400, req, mergeFailure.message);
-      return res.status(400).json({
-        success: false,
-        error: {
-          type: "AccountMergeFailed",
-          message: mergeFailure.message,
-          resultCode,
-          suggestion: mergeFailure.suggestion,
-        },
-      });
-    }
-
+    const code = resultCode;
+    const humanMessage = translateHorizonError(resultCode);
     const mappedStatus = mapHorizonErrorToStatus(resultCode);
     const httpStatus = mappedStatus ?? err.response.status ?? 400;
    
@@ -252,6 +240,19 @@ function errorHandler(err, req, res, next) {
         type: "HorizonTimeout",
         message: HORIZON_TIMEOUT_MESSAGE,
         suggestion: HORIZON_TIMEOUT_SUGGESTION,
+      },
+    });
+  }
+
+  // Transaction not found errors
+  if (err.isTransactionNotFound) {
+    logError(404, req, err.message);
+    return res.status(404).json({
+      success: false,
+      error: {
+        type: "NotFound",
+        message: err.message,
+        suggestion: "Verify the transaction hash is correct.",
       },
     });
   }
