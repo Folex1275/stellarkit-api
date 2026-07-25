@@ -190,6 +190,7 @@ app.use(rateLimiter);
 
 // ── Input Sanitization ──────────────────────────────────────────────────────
 app.use(sanitize);
+app.use(coerceQueryParams);
 
 // ── Health Check ────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
