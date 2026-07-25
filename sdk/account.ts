@@ -5,8 +5,14 @@ import type {
   AccountSignersResponse,
   AccountAgeResponse,
   AccountRiskScoreResponse,
+  AccountTransactionCountResponse,
+} from "../types/index.d";
+
+/** Transaction count summary returned by `AccountModule.getTransactionCount`. */
+export type TransactionCount = AccountTransactionCountResponse["data"];
   TrustlineEntry,
   PaymentOperation,
+  Signer,
 } from "../types/index.d";
 
 /** Paginated response returned by list endpoints. */
@@ -228,6 +234,28 @@ export class AccountModule {
   }
 
   /**
+   * Get account signing key configuration.
+   *
+   * Calls `GET /account/:id/signing-keys` and returns account signers,
+   * master key weight, and operation thresholds.
+   *
+   * @param id - Stellar account public key (non-empty string).
+   * @returns Resolves to account signing key configuration.
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response.
+   *
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const signingKeys = await account.getSigningKeys("GAAZI4...");
+   * console.log(signingKeys.masterWeight);
+   */
+  async getSigningKeys(id: string): Promise<SigningKeys> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
+    return this._get<SigningKeys>(`/account/${id}/signing-keys`);
+  }
+
+  /**
    * Get account age and maturity metrics.
    *
    * @param id - Stellar account public key.
@@ -250,6 +278,20 @@ export class AccountModule {
   }
 
   /**
+   * Get the total transaction count for an account, plus the timestamps of
+   * its first and last transactions — a lightweight summary that avoids
+   * paginating through the full transaction history.
+   *
+   * @param id - Stellar account public key.
+   * @returns Resolves to `{ count, firstTransactionAt, lastTransactionAt }`.
+   * @throws {StellarKitError} On non-2xx response (e.g. 404 account not found).
+   *
+   * @example
+   * const { count, firstTransactionAt } = await account.getTransactionCount("GAAZI4...");
+   * console.log(`${count} transactions since ${firstTransactionAt}`);
+   */
+  async getTransactionCount(id: string): Promise<TransactionCount> {
+    return this._get<TransactionCount>(`/account/${id}/transaction-count`);
    * Get full account data including balances, signers, and all metadata.
    *
    * Alias for getAccount — returns complete account information.

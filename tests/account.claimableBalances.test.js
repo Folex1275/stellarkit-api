@@ -75,10 +75,52 @@ describe("Account Claimable Balances Eligibility API", () => {
       expect(res.body.success).toBe(true);
       expect(res.body.data.eligible).toHaveLength(1);
       expect(res.body.data.eligible[0].id).toBe("000000001");
+      expect(res.body.data.eligible[0].isExpired).toBe(false);
       expect(res.body.data.notYetClaimable).toHaveLength(1);
       expect(res.body.data.notYetClaimable[0].id).toBe("000000002");
+      expect(res.body.data.notYetClaimable[0].isExpired).toBe(false);
+      // Expired balances are excluded by default — see ?includeExpired=true tests below.
+      expect(res.body.data.expired).toHaveLength(0);
+    });
+
+    it("includes expired balances tagged with isExpired when ?includeExpired=true", async () => {
+      const now = Math.floor(Date.now() / 1000);
+
+      const mockRecords = [
+        {
+          id: "000000001",
+          asset: "XLM",
+          amount: "100.0000000",
+          claimants: [
+            { destination: accountId, predicate: { unconditional: true } }
+          ]
+        },
+        {
+          id: "000000003",
+          asset: "XLM",
+          amount: "300.0000000",
+          claimants: [
+            { destination: accountId, predicate: { abs_before: (now - 3600).toString() } }
+          ]
+        }
+      ];
+
+      server.claimableBalances.mockReturnValue({
+        forClaimant: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        call: jest.fn().mockResolvedValue({ records: mockRecords })
+      });
+
+      const res = await request(app).get(
+        `/account/${accountId}/claimable-balances?includeExpired=true`
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data.eligible).toHaveLength(1);
+      expect(res.body.data.eligible[0].isExpired).toBe(false);
       expect(res.body.data.expired).toHaveLength(1);
       expect(res.body.data.expired[0].id).toBe("000000003");
+      expect(res.body.data.expired[0].isExpired).toBe(true);
     });
 
     it("handles complex predicates (AND)", async () => {
