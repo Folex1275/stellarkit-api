@@ -714,6 +714,104 @@ describe("Account Utility Endpoints", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // GET /account/:id/signing-keys
+  // ═══════════════════════════════════════════════════════════════════════════
+  describe("GET /account/:id/signing-keys", () => {
+    it("returns a fully normalized camelCase signing-keys payload", async () => {
+      server.loadAccount.mockResolvedValue({
+        id: VALID_ACCOUNT_ID,
+        signers: [
+          { key: VALID_ACCOUNT_ID, weight: "1", type: "ed25519_public_key" },
+          { key: signer1, weight: 2, type: "sha256_hash" },
+          { key: signer2, weight: 3, type: "preauth_tx", sponsor: VALID_ACCOUNT_ID },
+        ],
+        thresholds: {
+          low_threshold: 1,
+          med_threshold: 2,
+          high_threshold: 4,
+        },
+      });
+
+      const res = await request(app).get(`/account/${VALID_ACCOUNT_ID}/signing-keys`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.data).toEqual({
+        signers: [
+          {
+            key: VALID_ACCOUNT_ID,
+            weight: 1,
+            type: "ed25519_public_key",
+            sponsoredBy: null,
+          },
+          {
+            key: signer1,
+            weight: 2,
+            type: "hash_x",
+            sponsoredBy: null,
+          },
+          {
+            key: signer2,
+            weight: 3,
+            type: "pre_auth_tx",
+            sponsoredBy: VALID_ACCOUNT_ID,
+          },
+        ],
+        masterWeight: 1,
+        thresholds: {
+          lowThreshold: 1,
+          medThreshold: 2,
+          highThreshold: 4,
+        },
+      });
+
+      // Ensure no snake_case fields leaked into the normalized response.
+      const json = JSON.stringify(res.body.data);
+      expect(json).not.toContain("low_threshold");
+      expect(json).not.toContain("med_threshold");
+      expect(json).not.toContain("high_threshold");
+      expect(json).not.toContain("sponsored_by");
+    });
+
+    it("always includes sponsoredBy and supports horizon enum style signer types", async () => {
+      server.loadAccount.mockResolvedValue({
+        id: VALID_ACCOUNT_ID,
+        signers: [
+          { key: VALID_ACCOUNT_ID, weight: 5, type: "signer_key_type_ed25519" },
+          { key: signer1, weight: 3, type: "signer_key_type_hash_x" },
+          { key: signer2, weight: 2, type: "signer_key_type_pre_auth_tx", sponsored_by: signer1 },
+        ],
+        thresholds: {
+          low_threshold: 2,
+          med_threshold: 4,
+          high_threshold: 6,
+        },
+      });
+
+      const res = await request(app).get(`/account/${VALID_ACCOUNT_ID}/signing-keys`);
+      expect(res.statusCode).toBe(200);
+
+      res.body.data.signers.forEach((signer) => {
+        expect(signer).toHaveProperty("sponsoredBy");
+      });
+      expect(res.body.data.signers[0].type).toBe("ed25519_public_key");
+      expect(res.body.data.signers[1].type).toBe("hash_x");
+      expect(res.body.data.signers[2].type).toBe("pre_auth_tx");
+      expect(res.body.data.signers[2].sponsoredBy).toBe(signer1);
+      expect(res.body.data.masterWeight).toBe(5);
+    });
+
+    it("returns 404 for unknown account", async () => {
+      server.loadAccount.mockRejectedValue({ response: { status: 404 } });
+
+      const res = await request(app).get(`/account/${VALID_ACCOUNT_ID}/signing-keys`);
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.message).toBe("Account not found.");
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Edge Cases - All Endpoints
   // ═══════════════════════════════════════════════════════════════════════════
   describe("Edge Cases - All Endpoints", () => {

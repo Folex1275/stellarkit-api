@@ -77,9 +77,9 @@ const cacheTTL = {
     30000
   ),
 
-  /** /account/:id/signing-keys — signers change only on explicit signer ops */
-  signingKeys: msToSeconds(
-    process.env.CACHE_TTL_SIGNING_KEYS_MS,
+  /** /account/:id/transaction-count — changes only on new submissions */
+  transactionCount: msToSeconds(
+    process.env.CACHE_TTL_TX_COUNT_MS,
     20000
   ),
 };

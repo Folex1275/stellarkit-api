@@ -652,6 +652,20 @@ export interface AccountRiskScoreResponse {
   }
 }
 
+/**
+ * Response from GET /account/:id/transaction-count
+ * Returns the total transaction count for an account along with the
+ * timestamps of its first and last transactions.
+ */
+export interface AccountTransactionCountResponse {
+  success: true
+  data: {
+    count: number
+    firstTransactionAt: ISOTimestamp | null
+    lastTransactionAt: ISOTimestamp | null
+  }
+}
+
 // ============================================================
 // MODULE DECLARATION
 // ============================================================
