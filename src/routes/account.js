@@ -7,6 +7,7 @@ const {
   makeClaimableBalanceNotFoundError,
 } = require("../utils/errors");
 const cacheService = require("../services/cache");
+const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
@@ -488,6 +489,8 @@ router.get("/:id/payments", async (req, res, next) => {
     let query = server.payments().forAccount(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
+    const paymentResponse = await query.call();
+    const rawRecords = paymentResponse.records || [];
     // Use operations endpoint to get payment + create_account ops
     const opQuery = server.operations().forAccount(id).limit(limit).order(order);
     const opResponse = await (cursor ? opQuery.cursor(cursor) : opQuery).call();
