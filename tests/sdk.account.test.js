@@ -72,6 +72,7 @@ try {
     getSigningKeys(id) { return this._get(`/account/${id}/signing-keys`); }
     getAge(id) { return this._get(`/account/${id}/age`); }
     getRiskScore(id) { return this._get(`/account/${id}/risk-score`); }
+    getSequence(id) { return this._get(`/account/${id}/sequence`); }
     getAccountData(id) { return this.getAccount(id); }
     getOffers(id, options) {
       const params = new URLSearchParams();
@@ -450,6 +451,27 @@ describe("AccountModule", () => {
     it("throws StellarKitError on failure", async () => {
       mockFetch(500, { success: false, error: { message: "Server error", type: "SERVER_ERROR" } });
       await expect(module.getRiskScore(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
+    });
+  });
+
+  // ── getSequence ─────────────────────────────────────────────────────────
+
+  describe("getSequence", () => {
+    it("calls GET /account/:id/sequence and resolves data", async () => {
+      const sequenceData = { accountId: ACCOUNT_ID, sequence: "123", lastModifiedLedger: 100 };
+      mockFetch(200, { success: true, data: sequenceData });
+      const data = await module.getSequence(ACCOUNT_ID);
+      expect(data.sequence).toBe("123");
+      expect(data.lastModifiedLedger).toBe(100);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/sequence`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError on failure", async () => {
+      mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
+      await expect(module.getSequence(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
     });
   });
 

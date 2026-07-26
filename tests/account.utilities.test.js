@@ -2,6 +2,7 @@ const request = require("supertest");
 const app = require("../src/index");
 const { server } = require("../src/config/stellar");
 const { Keypair } = require("@stellar/stellar-sdk");
+const cacheService = require("../src/services/cache");
 
 // Mock Horizon server
 jest.mock("../src/config/stellar", () => {
@@ -22,6 +23,7 @@ describe("Account Utility Endpoints", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    cacheService.flush();
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -48,6 +50,8 @@ describe("Account Utility Endpoints", () => {
             lastModifiedLedger: 42,
           },
         });
+        // First call should be a cache miss
+        expect(res.headers["x-cache"]).toBe("MISS");
       });
 
       it("handles large sequence numbers", async () => {
@@ -62,6 +66,81 @@ describe("Account Utility Endpoints", () => {
 
         expect(res.statusCode).toBe(200);
         expect(res.body.data.sequence).toBe(largeSequence);
+      });
+
+      it("returns X-Cache: HIT on repeated requests for the same account", async () => {
+        server.loadAccount.mockResolvedValue({
+          id: VALID_ACCOUNT_ID,
+          sequence: "123456789",
+          last_modified_ledger: 42,
+        });
+
+        const res1 = await request(app).get(`/account/${VALID_ACCOUNT_ID}/sequence`);
+        expect(res1.statusCode).toBe(200);
+        expect(res1.headers["x-cache"]).toBe("MISS");
+
+        // Second call should hit cache
+        const res2 = await request(app).get(`/account/${VALID_ACCOUNT_ID}/sequence`);
+        expect(res2.statusCode).toBe(200);
+        expect(res2.headers["x-cache"]).toBe("HIT");
+
+        // loadAccount should only have been called once
+        expect(server.loadAccount).toHaveBeenCalledTimes(1);
+      });
+
+      it("bypasses cache when fresh=true is specified", async () => {
+        server.loadAccount.mockResolvedValue({
+          id: VALID_ACCOUNT_ID,
+          sequence: "123456789",
+          last_modified_ledger: 42,
+        });
+
+        const res1 = await request(app).get(`/account/${VALID_ACCOUNT_ID}/sequence`);
+        expect(res1.headers["x-cache"]).toBe("MISS");
+
+        // fresh=true should bypass cache
+        const res2 = await request(app).get(`/account/${VALID_ACCOUNT_ID}/sequence?fresh=true`);
+        expect(res2.statusCode).toBe(200);
+        expect(res2.headers["x-cache"]).toBe("MISS");
+
+        // loadAccount should have been called twice (once for each miss)
+        expect(server.loadAccount).toHaveBeenCalledTimes(2);
+      });
+
+      it("caches different account IDs independently", async () => {
+        const account2 = Keypair.random().publicKey();
+
+        server.loadAccount.mockImplementation((id) => {
+          if (id === VALID_ACCOUNT_ID) {
+            return Promise.resolve({
+              id: VALID_ACCOUNT_ID,
+              sequence: "111",
+              last_modified_ledger: 1,
+            });
+          }
+          return Promise.resolve({
+            id: account2,
+            sequence: "222",
+            last_modified_ledger: 2,
+          });
+        });
+
+        const res1 = await request(app).get(`/account/${VALID_ACCOUNT_ID}/sequence`);
+        expect(res1.headers["x-cache"]).toBe("MISS");
+        expect(res1.body.data.sequence).toBe("111");
+
+        const res2 = await request(app).get(`/account/${account2}/sequence`);
+        expect(res2.headers["x-cache"]).toBe("MISS");
+        expect(res2.body.data.sequence).toBe("222");
+
+        // Both IDs should now be cached
+        const res3 = await request(app).get(`/account/${VALID_ACCOUNT_ID}/sequence`);
+        expect(res3.headers["x-cache"]).toBe("HIT");
+        expect(res3.body.data.sequence).toBe("111");
+
+        const res4 = await request(app).get(`/account/${account2}/sequence`);
+        expect(res4.headers["x-cache"]).toBe("HIT");
+        expect(res4.body.data.sequence).toBe("222");
       });
     });
 
