@@ -1,3 +1,40 @@
+const HORIZON_TIMEOUT_MESSAGE =
+  "The Stellar Horizon node did not respond in time.";
+const HORIZON_TIMEOUT_SUGGESTION =
+  "Try again in a few seconds. If the issue persists check the Stellar network status at https://status.stellar.org.";
+
+/**
+ * Returns true when an error indicates Horizon did not respond before the timeout.
+ *
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function isHorizonTimeoutError(err) {
+  if (!err) return false;
+  if (err.isHorizonTimeout) return true;
+  // Horizon HTTP errors include response.data and are not timeouts
+  if (err.response && err.response.data) return false;
+
+  const code = err.code || (err.cause && err.cause.code);
+  if (code === "ECONNABORTED" || code === "ETIMEDOUT") return true;
+  if (err.name === "AbortError") return true;
+
+  const msg = (err.message || "").toLowerCase();
+  return msg.includes("timeout") || msg.includes("timed out");
+}
+
+/**
+ * Creates a structured HorizonTimeout error for slow or unresponsive Horizon nodes.
+ *
+ * @returns {Error}
+ */
+function makeHorizonTimeoutError() {
+  const err = new Error(HORIZON_TIMEOUT_MESSAGE);
+  err.isHorizonTimeout = true;
+  err.status = 504;
+  return err;
+}
+
 /**
  * Creates a structured AccountNotFound error for Horizon 404 responses.
  *
@@ -16,31 +53,23 @@ function makeAccountNotFoundError(accountId, network) {
   return err;
 }
 
-/**
- * Creates a structured error for insufficient XLM reserve scenarios.
- * Use this when an account does not have enough XLM to meet the minimum
- * reserve requirement (e.g., when creating a new account or adding subentries).
- *
- * @param {string} accountId - Stellar public key with insufficient reserve
- * @param {number} availableBalance - Current spendable XLM balance
- * @param {number} requiredReserve - Minimum XLM reserve required
- * @param {string} network - Network name ("testnet" or "mainnet")
- * @returns {Error}
- */
-function makeInsufficientXLMReserveError(accountId, availableBalance, requiredReserve, network) {
-  const shortfall = Math.max(0, requiredReserve - availableBalance);
+function makeAssetNotFoundError(code, issuer, network) {
   const err = new Error(
-    `Account ${accountId} has insufficient XLM reserve on the Stellar ${network} network. ` +
-    `Available: ${availableBalance} XLM, Required: ${requiredReserve} XLM, Shortfall: ${shortfall.toFixed(7)} XLM.`
+    `Asset ${code}:${issuer} was not found on the Stellar ${network} network.`
   );
-  err.isInsufficientXLMReserve = true;
-  err.accountId = accountId;
-  err.availableBalance = availableBalance;
-  err.requiredReserve = requiredReserve;
-  err.shortfall = shortfall;
+  err.isAssetNotFound = true;
+  err.assetCode = code;
+  err.assetIssuer = issuer;
   err.network = network;
-  err.status = 422;
+  err.status = 404;
   return err;
 }
 
-module.exports = { makeAccountNotFoundError, makeInsufficientXLMReserveError };
+module.exports = {
+  HORIZON_TIMEOUT_MESSAGE,
+  HORIZON_TIMEOUT_SUGGESTION,
+  isHorizonTimeoutError,
+  makeHorizonTimeoutError,
+  makeAccountNotFoundError,
+  makeAssetNotFoundError,
+};
