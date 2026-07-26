@@ -319,6 +319,65 @@ router.get("/:id/signing-keys", async (req, res, next) => {
 });
 
 /**
+ * GET /account/:id/multisig-info
+ *
+ * Returns a human-readable summary of an account's multisig configuration,
+ * including whether the account is multisig-enabled, all three threshold
+ * levels, the master-key weight, and each signer with its key, weight, and type.
+ *
+ * An account is considered "multisig" when it has more than one signer OR
+ * when any threshold is greater than 1 (i.e. no single signer can unilaterally
+ * authorise every operation class).
+ *
+ * @example
+ *   GET /account/GABC.../multisig-info
+ */
+router.get("/:id/multisig-info", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+
+    const signers = (account.signers || []).map((s) => ({
+      key: s.key,
+      weight: Number(s.weight) || 0,
+      type: normalizeSignerType(s.type),
+    }));
+
+    const thresholds = {
+      low: account.thresholds?.low_threshold ?? 0,
+      med: account.thresholds?.med_threshold ?? 0,
+      high: account.thresholds?.high_threshold ?? 0,
+    };
+
+    // Master key is the signer whose key matches the account ID itself.
+    const masterSigner = signers.find((s) => s.key === account.id);
+    const masterWeight = masterSigner ? masterSigner.weight : 0;
+
+    // The account is "multisig" when it requires more than one party to sign,
+    // which is true if there is more than one registered signer OR any
+    // threshold exceeds the weight of the master key alone.
+    const isMultisig =
+      signers.length > 1 ||
+      thresholds.low > masterWeight ||
+      thresholds.med > masterWeight ||
+      thresholds.high > masterWeight;
+
+    return success(res, {
+      accountId: account.id,
+      isMultisig,
+      masterWeight,
+      thresholds,
+      signers,
+      signerCount: signers.length,
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
  * GET /account/:id/effects
  */
 router.get("/:id/effects", async (req, res, next) => {
@@ -598,11 +657,30 @@ router.get("/:id/trades", async (req, res, next) => {
 
 /**
  * GET /account/:id/offers
+ *
+ * Returns open DEX offers for an account.
+ *
+ * Query params:
+ *   - offerId       (string)  — fetch a single offer by its numeric ID
+ *   - expandAssets  (boolean) — when "true", embeds full { code, issuer, type }
+ *                               objects for both selling and buying assets.
+ *                               When omitted (default), returns simplified
+ *                               asset strings for backward compatibility.
+ *   - limit, order, cursor   — standard pagination
+ *
+ * @example
+ *   GET /account/:id/offers                        → simplified asset strings
+ *   GET /account/:id/offers?expandAssets=true      → full asset objects
  */
 router.get("/:id/offers", async (req, res, next) => {
   try {
     const { id } = req.params;
     const { offerId } = req.query;
+
+    // expandAssets=true embeds full { code, issuer, type } objects on each offer.
+    // Any value other than the string "true" keeps the default simplified form.
+    const expandAssets = req.query.expandAssets === "true";
+
     validateAccountId(id);
 
     if (offerId) {
@@ -630,9 +708,6 @@ router.get("/:id/offers", async (req, res, next) => {
 
     const offerResponse = await query.call();
     const offers = (offerResponse.records || []).map((offer) => {
-      const buildAsset = (assetType, assetCode, assetIssuer) =>
-        normalizeAsset(assetCode, assetIssuer, assetType);
-
       // Derive a single decimal price string from price_r (n/d fraction) when
       // available, falling back to the pre-computed price string from Horizon.
       // Always format to 7 decimal places for consistency with other amounts.
@@ -645,23 +720,45 @@ router.get("/:id/offers", async (req, res, next) => {
         priceDecimal = parseFloat(offer.price || "0").toFixed(7);
       }
 
+      // Full normalized asset object { code, issuer, type }
+      const sellingAsset = normalizeAsset(
+        offer.selling_asset_code,
+        offer.selling_asset_issuer,
+        offer.selling_asset_type,
+      );
+      const buyingAsset = normalizeAsset(
+        offer.buying_asset_code,
+        offer.buying_asset_issuer,
+        offer.buying_asset_type,
+      );
+
+      if (expandAssets) {
+        // ?expandAssets=true — embed full asset objects on both sides
+        return {
+          id: offer.id,
+          seller: offer.seller,
+          selling: {
+            asset: sellingAsset,
+            amount: parseFloat(offer.amount || "0").toFixed(7),
+          },
+          buying: {
+            asset: buyingAsset,
+          },
+          price: priceDecimal,
+          lastModifiedLedger: offer.last_modified_ledger,
+        };
+      }
+
+      // Default (backward-compatible) — asset fields spread directly onto selling/buying
       return {
         id: offer.id,
         seller: offer.seller,
         selling: {
-          ...buildAsset(
-            offer.selling_asset_type,
-            offer.selling_asset_code,
-            offer.selling_asset_issuer,
-          ),
+          ...sellingAsset,
           // Format to 7 decimal places (Stellar precision standard)
           amount: parseFloat(offer.amount || "0").toFixed(7),
         },
-        buying: buildAsset(
-          offer.buying_asset_type,
-          offer.buying_asset_code,
-          offer.buying_asset_issuer,
-        ),
+        buying: buyingAsset,
         // price is a 7-decimal string derived from the price_r fraction
         price: priceDecimal,
         // camelCase rename of last_modified_ledger
