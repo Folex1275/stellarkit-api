@@ -10,6 +10,8 @@ const logger = require("./utils/logger");
 const { setupWebSocket } = require("./websocket");
 const { server } = require("./config/stellar");
 const cacheService = require("./services/cache");
+const networkStatusCache = cacheService;
+const feeEstimateCache = cacheService;
 
 const rateLimiter = require("./middleware/rateLimiter");
 const contentTypeValidator = require("./middleware/contentTypeValidator");
@@ -18,6 +20,8 @@ const errorHandler = require("./middleware/errorHandler");
 const requestIdMiddleware = require("./middleware/requestId");
 const apiKeyMiddleware = require("./middleware/apiKeyAuth");
 const sanitize = require("./middleware/sanitize");
+const coerceQueryParams = require("./middleware/coerceQueryParams");
+const etagMiddleware = require("./middleware/etag");
 
 const networkStatusRouter = require("./routes/networkStatus");
 const feeEstimateRouter = require("./routes/feeEstimate");
@@ -37,6 +41,7 @@ const networkRouter = require("./routes/network");
 const app = express();
 // Disable server identification header for security
 app.disable("x-powered-by");
+const { normalizeAmountFields } = require("./utils/response");
 
 const PORT = process.env.PORT || 3000;
 
@@ -187,6 +192,12 @@ app.use(rateLimiter);
 
 // ── Input Sanitization ──────────────────────────────────────────────────────
 app.use(sanitize);
+app.use(coerceQueryParams);
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (payload) => originalJson(normalizeAmountFields(payload));
+  next();
+});
 
 // ── Health Check ────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
@@ -206,6 +217,9 @@ app.get("/health", (req, res) => {
 app.use(apiKeyMiddleware);
 
 // ── API Routes ───────────────────────────────────────────────────────────────
+app.use("/network-status", networkStatusRouter);
+app.use("/network", networkStatusRouter);
+app.use("/fee-estimate", feeEstimateRouter);
 // Apply ETag middleware to cached endpoints
 app.use("/network-status", etagMiddleware, networkStatusRouter);
 app.use("/fee-estimate", etagMiddleware, feeEstimateRouter);
@@ -537,6 +551,12 @@ app.get("/", (req, res) => {
           path: "/dex/price/:sellAsset/:buyAsset",
           description:
             "Calculate effective exchange rate via best DEX payment path",
+        },
+        {
+          method: "GET",
+          path: "/dex/top-markets",
+          description:
+            "Top DEX trading pairs by volume with spread (optional ?limit=, default 10, max 50)",
         },
         {
           method: "GET",

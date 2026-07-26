@@ -16,7 +16,7 @@ describe("ErrorHandler Middleware", () => {
   });
 
   describe("Horizon Errors", () => {
-    it("should map transaction result code tx_bad_seq to 409 status code", () => {
+    it("maps a failed transaction submission (tx_bad_seq) to TransactionSubmissionFailed at 409", () => {
       const err = {
         response: {
           status: 400,
@@ -38,18 +38,16 @@ describe("ErrorHandler Middleware", () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: {
-          type: "HorizonError",
-          title: "Transaction Failed",
-          detail: "The transaction failed due to bad sequence.",
-          status: 400,
-          extras: err.response.data.extras,
-          code: "tx_bad_seq",
-          message: "Transaction sequence number does not match the account's current sequence. Reload the account and rebuild the transaction.",
+          type: "TransactionSubmissionFailed",
+          message: "Transaction failed.",
+          resultCodes: { transaction: "tx_bad_seq", operations: [] },
+          suggestion:
+            "Transaction sequence number does not match the account's current sequence. Reload the account and rebuild the transaction.",
         },
       });
     });
 
-    it("should map operation result code op_no_destination to 404 status code", () => {
+    it("maps a failed transaction submission (op_no_destination) to TransactionSubmissionFailed at 404", () => {
       const err = {
         response: {
           status: 400,
@@ -71,13 +69,11 @@ describe("ErrorHandler Middleware", () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: {
-          type: "HorizonError",
-          title: "Transaction Failed",
-          detail: "The destination account was not found.",
-          status: 400,
-          extras: err.response.data.extras,
-          code: "op_no_destination",
-          message: "The destination account does not exist. Create the account first with a createAccount operation.",
+          type: "TransactionSubmissionFailed",
+          message: "Transaction failed.",
+          resultCodes: { transaction: null, operations: ["op_no_destination"] },
+          suggestion:
+            "The destination account does not exist. Create the account first with a createAccount operation.",
         },
       });
     });
@@ -252,6 +248,94 @@ describe("ErrorHandler Middleware", () => {
       expect(body.error.title).toBe("Horizon Error");
       expect(body.error.detail).toBe("An error occurred with the Stellar network.");
       expect(body.error.extras).toBeNull();
+    });
+
+    describe("Account merge specific failures", () => {
+      beforeEach(() => {
+        req.path = "/account/GABC123456789012345678901234567890123456789012345678901234/merge";
+      });
+
+      it("returns AccountMergeFailed for op_does_not_exist", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Merge operation failed.",
+              extras: { result_codes: { operations: ["op_does_not_exist"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message: "Account merge failed because the destination account does not exist.",
+            resultCode: "op_does_not_exist",
+            suggestion:
+              "Use an existing funded destination account (G...) before retrying the merge.",
+          },
+        });
+      });
+
+      it("returns AccountMergeFailed for op_malformed", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Malformed operation.",
+              extras: { result_codes: { operations: ["op_malformed"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message: "Account merge failed because the operation payload is malformed.",
+            resultCode: "op_malformed",
+            suggestion:
+              "Check source/destination values and rebuild the transaction with a valid accountMerge operation.",
+          },
+        });
+      });
+
+      it("returns AccountMergeFailed for op_dest_full", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Destination full.",
+              extras: { result_codes: { operations: ["op_dest_full"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message:
+              "Account merge failed because the destination account cannot accept additional reserves or entries.",
+            resultCode: "op_dest_full",
+            suggestion:
+              "Free capacity on the destination account (remove subentries or use a different destination) and try again.",
+          },
+        });
+      });
     });
   });
 
