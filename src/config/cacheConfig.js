@@ -94,6 +94,12 @@ const cacheTTL = {
     process.env.CACHE_TTL_ARBITRAGE_MS,
     5000
   ),
+
+  /** /account/:id/sequence — changes only when account submits a transaction */
+  sequence: msToSeconds(
+    process.env.CACHE_TTL_SEQUENCE_MS,
+    20000
+  ),
 };
 
 module.exports = cacheTTL;

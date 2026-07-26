@@ -286,19 +286,50 @@ router.get("/:id/native-balance", async (req, res, next) => {
 
 /**
  * GET /account/:id/sequence
+ *
+ * Returns the current sequence number for an account.
+ *
+ * Sequence numbers only change when a transaction submitted by the account is
+ * applied to the ledger, making short-term caching effective. Responses are
+ * cached per account ID.
+ *
+ * Query params:
+ *   - fresh (boolean, default: false) — bypasses the cache when set to "true"
+ *
+ * Response headers:
+ *   - X-Cache: HIT  — served from cache
+ *   - X-Cache: MISS — fetched live from Horizon and cached
+ *
+ * Cache TTL is configurable via the CACHE_TTL_SEQUENCE_MS environment variable
+ * (default: 20 000 ms / 20 seconds).
  */
 router.get("/:id/sequence", async (req, res, next) => {
   try {
     const { id } = req.params;
     validateAccountId(id);
 
+    const fresh = req.query.fresh === "true";
+    const cacheKey = `sequence:${id}`;
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached !== undefined) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
     const account = await server.loadAccount(id);
 
-    return success(res, {
+    const data = {
       accountId: account.id,
       sequence: account.sequence,
       lastModifiedLedger: account.last_modified_ledger,
-    });
+    };
+
+    cacheService.set(cacheKey, data, cacheTTL.sequence);
+    res.set("X-Cache", "MISS");
+    return success(res, data);
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }

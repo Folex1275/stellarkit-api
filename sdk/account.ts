@@ -6,14 +6,17 @@ import type {
   AccountAgeResponse,
   AccountRiskScoreResponse,
   AccountTransactionCountResponse,
-} from "../types/index.d";
-
-/** Transaction count summary returned by `AccountModule.getTransactionCount`. */
-export type TransactionCount = AccountTransactionCountResponse["data"];
+  AccountSequenceResponse,
   TrustlineEntry,
   PaymentOperation,
   Signer,
 } from "../types/index.d";
+
+/** Transaction count summary returned by `AccountModule.getTransactionCount`. */
+export type TransactionCount = AccountTransactionCountResponse["data"];
+
+/** Sequence details returned by `AccountModule.getSequence`. */
+export type SequenceData = AccountSequenceResponse["data"];
 
 /** Paginated response returned by list endpoints. */
 export interface PaginatedResponse<T> {
@@ -292,6 +295,28 @@ export class AccountModule {
    */
   async getTransactionCount(id: string): Promise<TransactionCount> {
     return this._get<TransactionCount>(`/account/${id}/transaction-count`);
+  }
+
+  /**
+   * Get the current sequence number and last modified ledger for an account.
+   *
+   * @param id - Stellar account public key (non-empty string).
+   * @returns Resolves to the sequence payload including `accountId`, `sequence`, and `lastModifiedLedger`.
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response.
+   *
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const sequence = await account.getSequence("GAAZI4...");
+   * console.log(sequence.sequence); // "123"
+   */
+  async getSequence(id: string): Promise<SequenceData> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
+    return this._get<SequenceData>(`/account/${id}/sequence`);
+  }
+
+  /**
    * Get full account data including balances, signers, and all metadata.
    *
    * Alias for getAccount — returns complete account information.
