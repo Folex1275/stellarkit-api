@@ -49,6 +49,20 @@ router.get("/arbitrage/:assetCode/:assetIssuer", async (req, res, next) => {
       validateAsset(assetCode, assetIssuer);
     }
 
+    // Cache: arbitrage data changes rapidly with market conditions.
+    // A fixed key covers all pairs per asset; TTL defaults to 5 s and is
+    // configurable via CACHE_TTL_ARBITRAGE_MS.
+    const ARBITRAGE_CACHE_KEY = `dex:arbitrage:${assetCode.toUpperCase()}:${assetIssuer}`;
+    const fresh = req.query.fresh === "true";
+
+    if (!fresh) {
+      const cached = cacheService.get(ARBITRAGE_CACHE_KEY);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
     const asset = (assetCode.toUpperCase() === "XLM" && assetIssuer.toLowerCase() === "native")
       ? Asset.native()
       : new Asset(assetCode.toUpperCase(), assetIssuer);
@@ -70,10 +84,14 @@ router.get("/arbitrage/:assetCode/:assetIssuer", async (req, res, next) => {
       }))
       .filter((p) => p.path.length > 0);
 
-    return success(res, {
+    const data = {
       pathsFound: paths.length > 0,
       paths: paths,
-    });
+    };
+
+    cacheService.set(ARBITRAGE_CACHE_KEY, data, cacheTTL.arbitrage);
+    res.set("X-Cache", "MISS");
+    return success(res, data);
   } catch (err) {
     next(err);
   }
