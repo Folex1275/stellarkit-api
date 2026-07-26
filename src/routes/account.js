@@ -13,14 +13,13 @@ registerParamValidation(router);
 
 const { buildAccountAgeResponse } = require("../utils/accountAge");
 const cacheTTL = require("../config/cacheConfig");
-
-
 const axios = require("axios");
 const { Asset } = require("@stellar/stellar-sdk");
 const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
-
 const { getAssetMetadataFromToml } = require("../utils/tomlResolver");
 const { formatBalance } = require("../utils/formatBalance");
+const { validateAccountId, validateAssetCode } = require("../utils/validators");
+const { validateEffectType } = require("../utils/effectTypes");
 
 // Cache TTL for account endpoint responses (in seconds)
 const CACHE_TTL_ACCOUNT = parseInt(process.env.CACHE_TTL_ACCOUNT_MS, 10) / 1000 || 10;
@@ -230,15 +229,7 @@ router.get("/:id/trustlines", async (req, res, next) => {
       total: trustlines.length,
       limit: null,
       cursor: null,
-    };
-
-    // Only cache unfiltered results (assetCode filter produces a subset)
-    if (!assetCode) {
-      cacheService.set(cacheKey, data, cacheTTL.trustlines);
-    }
-
-    res.set("X-Cache", "MISS");
-    return success(res, data);
+    });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -1514,10 +1505,10 @@ router.get("/:id/sponsorship", async (req, res, next) => {
       accountsSponsoring,
       count: sponsoredEntries.length,
     });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
   }
-
-  return entries;
-}
+});
 
 /**
  * GET /account/:id/sponsorships
@@ -2488,15 +2479,6 @@ router.get("/:id/signing-keys", async (req, res, next) => {
     }
 
     const account = await server.loadAccount(id);
-    const dataEntries = account.data_attr || {};
-
-    const formattedData = Object.entries(dataEntries).map(([key, rawValue]) => {
-      let decodedValue = null;
-      try {
-        decodedValue = Buffer.from(rawValue, "base64").toString("utf8");
-      } catch (e) {
-        // Not decodable as UTF-8
-      }
 
     // Normalise every signer entry from Horizon into a clean shape
     const signers = (account.signers || []).map((s) => ({
