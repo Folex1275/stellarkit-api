@@ -18,6 +18,10 @@ router.use(normalizeAssetCode);
 
 const DEFAULT_ASSET_HOLDERS_CACHE_TTL_MS = 30000;
 
+function isFreshRequest(query) {
+  return query.fresh === true || query.fresh === "true";
+}
+
 function getAssetHoldersCacheTtlSeconds() {
   const parsed = Number.parseInt(process.env.CACHE_TTL_ASSET_HOLDERS_MS, 10);
   const ttlMs = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ASSET_HOLDERS_CACHE_TTL_MS;
@@ -72,7 +76,7 @@ router.get(
       const assetCode = code.toUpperCase();
       const { limit, order, cursor } = parsePaginationParams(req.query);
 
-      const fresh = req.query.fresh === "true";
+      const fresh = isFreshRequest(req.query);
       const cacheKey = `asset-holders:${assetCode}:${issuer}:${limit}:${order}:${cursor || ""}`;
 
       if (!fresh) {
@@ -140,7 +144,7 @@ router.get("/:code/:issuer", async (req, res, next) => {
 
     const assetCode = code.toUpperCase();
     const cacheKey = `asset:${assetCode}:${issuer}`;
-    const fresh = req.query.fresh === "true";
+    const fresh = isFreshRequest(req.query);
 
     // Check cache first (unless fresh=true)
     if (!fresh) {
@@ -512,7 +516,7 @@ router.get("/:code/:issuer/price", async (req, res, next) => {
 
     const assetCode = code.toUpperCase();
     const cacheKey = `asset-price:${assetCode}:${issuer}`;
-    const fresh = req.query.fresh === "true";
+    const fresh = isFreshRequest(req.query);
 
     if (!fresh) {
       const cached = cacheService.get(cacheKey);

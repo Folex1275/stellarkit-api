@@ -19,7 +19,6 @@ const { Asset } = require("@stellar/stellar-sdk");
 const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
 const { getAssetMetadataFromToml } = require("../utils/tomlResolver");
 const { formatBalance } = require("../utils/formatBalance");
-const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { validateEffectType } = require("../utils/effectTypes");
 
 // Cache TTL for account endpoint responses (in seconds)
@@ -520,8 +519,7 @@ router.get("/:id/payments", async (req, res, next) => {
     let query = server.payments().forAccount(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
-    const paymentResponse = await query.call();
-    const rawRecords = paymentResponse.records || [];
+    await query.call();
     // Use operations endpoint to get payment + create_account ops
     const opQuery = server.operations().forAccount(id).limit(limit).order(order);
     const opResponse = await (cursor ? opQuery.cursor(cursor) : opQuery).call();

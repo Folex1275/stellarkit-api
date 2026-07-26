@@ -10,13 +10,6 @@ const { StrKey } = require("@stellar/stellar-sdk");
  */
 function qp(param, msg) {
   return `Query param '${param}' ${msg}`;
- * Build a query-parameter error message in the form "Query parameter '<field>': <detail>".
- * @param {string} field
- * @param {string} detail
- * @returns {string}
- */
-function qp(field, detail) {
-  return `Query parameter '${field}': ${detail}`;
 }
 
 /**
@@ -171,7 +164,6 @@ function validateOrder(order) {
   return lowerOrder;
 }
 
-module.exports = { validateAccountId, validateContractId, validateAssetCode, validateLimit, validateOrder };
 /**
  * Validates a Stellar asset defined by a code and issuer route parameter pair.
  *
@@ -222,4 +214,11 @@ function validateAsset(code, issuer) {
   }
 }
 
-module.exports = { validateAccountId, validateAssetCode, validateLimit, validateOrder, validateAsset };
+module.exports = {
+  validateAccountId,
+  validateContractId,
+  validateAssetCode,
+  validateLimit,
+  validateOrder,
+  validateAsset,
+};
