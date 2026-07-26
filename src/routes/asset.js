@@ -7,7 +7,6 @@ const { server, NETWORK } = require("../config/stellar");
 const cacheService = require("../services/cache");
 const { success } = require("../utils/response");
 const { formatBalance } = require("../utils/formatBalance");
-const cacheService = require("../services/cache");
 const { assetHoldersRateLimiter } = require("../middleware/rateLimiter");
 const normalizeAssetCode = require("../middleware/normalizeAssetCode");
 const { validateAccountId, validateAssetCode, validateAsset, validateLimit } = require("../utils/validators");

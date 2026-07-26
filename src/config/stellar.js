@@ -1,7 +1,5 @@
 require("dotenv").config();
 const { Horizon, rpc } = require("@stellar/stellar-sdk");
-const { makeAccountNotFoundError } = require("../utils/errors");
-const { Horizon } = require("@stellar/stellar-sdk");
 const {
   makeAccountNotFoundError,
   makeHorizonTimeoutError,
