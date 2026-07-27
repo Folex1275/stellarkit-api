@@ -110,8 +110,15 @@ export class AccountModule {
   }
 
   /** @private Fetch a path and return the `data` field, or throw StellarKitError. */
-  private async _get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers });
+  private async _get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+    const searchParams = new URLSearchParams();
+    Object.entries(params ?? {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) searchParams.set(key, String(value));
+    });
+
+    const query = searchParams.toString();
+    const url = `${this.baseUrl}${path}${query ? `?${query}` : ""}`;
+    const res = await fetch(url, { headers: this.headers });
     const body = await res.json();
     if (!res.ok) {
       throw new StellarKitError(

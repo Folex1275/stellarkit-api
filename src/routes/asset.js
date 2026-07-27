@@ -6,7 +6,6 @@ const { Asset } = require("@stellar/stellar-sdk");
 const { server, NETWORK } = require("../config/stellar");
 const cacheService = require("../services/cache");
 const { success } = require("../utils/response");
-const { formatBalance } = require("../utils/formatBalance");
 const { assetHoldersRateLimiter } = require("../middleware/rateLimiter");
 const normalizeAssetCode = require("../middleware/normalizeAssetCode");
 const { validateAccountId, validateAssetCode, validateAsset, validateLimit } = require("../utils/validators");
@@ -39,17 +38,8 @@ function formatAssetHolder(account, assetCode, issuer) {
   const balance = findAssetBalance(account, assetCode, issuer);
 
   return {
-    accountId: account.id || account.account_id,
-    balance: formatBalance(balance ? balance.balance : "0.0000000"),
-    limit: balance ? balance.limit : null,
-    buyingLiabilities: formatBalance(balance ? balance.buying_liabilities : "0.0000000"),
-    sellingLiabilities: formatBalance(balance ? balance.selling_liabilities : "0.0000000"),
-    isAuthorized: balance ? balance.is_authorized : null,
-    isAuthorizedToMaintainLiabilities: balance
-      ? balance.is_authorized_to_maintain_liabilities
-      : null,
-    isClawbackEnabled: balance ? balance.is_clawback_enabled : null,
-    lastModifiedLedger: account.last_modified_ledger,
+    address: account.id || account.account_id,
+    balance: toSevenDecimalString(balance ? balance.balance : "0.0000000"),
   };
 }
 
