@@ -43,8 +43,9 @@ describe("Account Can Receive API", () => {
             expect(res.body.data).toEqual({
                 accountId,
                 asset: {
-                    assetCode: "XLM",
-                    assetIssuer: "native",
+                    code: "XLM",
+                    issuer: null,
+                    type: "native",
                 },
                 canReceive: true,
                 reasons: [],
@@ -242,7 +243,7 @@ describe("Account Can Receive API", () => {
 
             expect(res.statusCode).toBe(400);
             expect(res.body.success).toBe(false);
-            expect(res.body.error.type).toBe("ValidationError");
+            expect(res.body.error.type).toBe("InvalidAccountId");
         });
 
         it("returns 400 for invalid asset code", async () => {
@@ -262,7 +263,7 @@ describe("Account Can Receive API", () => {
 
             expect(res.statusCode).toBe(400);
             expect(res.body.success).toBe(false);
-            expect(res.body.error.type).toBe("ValidationError");
+            expect(res.body.error.type).toBe("InvalidAccountId");
         });
     });
 

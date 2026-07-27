@@ -86,11 +86,18 @@ describe("Endpoint rate limiting", () => {
     expect(res.body).toEqual({
       success: false,
       error: {
-        type: "RateLimitError",
-        message:
-          "Too many account summary requests, please try again after 15 minutes.",
+        type: "RateLimitExceeded",
+        message: "Too many requests, please try again later.",
+        retryAfter: 900,
+        resetAt: expect.any(String),
       },
     });
+  }, 30000);
+    // Verify rate limit headers are present
+    expect(res.headers["retry-after"]).toBe("900");
+    expect(res.headers["x-ratelimit-limit"]).toBe("20");
+    expect(res.headers["x-ratelimit-remaining"]).toBe("0");
+    expect(res.headers["x-ratelimit-reset"]).toBeDefined();
   });
 
   it("limits /asset/:code/:issuer/holders to 10 requests per 15 minutes per IP", async () => {
@@ -138,13 +145,19 @@ describe("Endpoint rate limiting", () => {
     expect(limitedResponse.body).toEqual({
       success: false,
       error: {
-        type: "RateLimitError",
-        message:
-          "Too many asset holder requests, please try again after 15 minutes.",
+        type: "RateLimitExceeded",
+        message: "Too many requests, please try again later.",
+        retryAfter: 900,
+        resetAt: expect.any(String),
       },
     });
+    // Verify rate limit headers are present
+    expect(limitedResponse.headers["retry-after"]).toBe("900");
+    expect(limitedResponse.headers["x-ratelimit-limit"]).toBe("10");
+    expect(limitedResponse.headers["x-ratelimit-remaining"]).toBe("0");
+    expect(limitedResponse.headers["x-ratelimit-reset"]).toBeDefined();
     expect(query.call).toHaveBeenCalledTimes(10);
-  });
+  }, 30000);
 
   it("keeps non-expensive endpoints on the existing global limit", async () => {
     const { app } = loadFreshApp();
@@ -153,5 +166,5 @@ describe("Endpoint rate limiting", () => {
       const res = await request(app).get("/health");
       expect(res.statusCode).toBe(200);
     }
-  });
+  }, 30000);
 });

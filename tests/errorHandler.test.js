@@ -16,7 +16,7 @@ describe("ErrorHandler Middleware", () => {
   });
 
   describe("Horizon Errors", () => {
-    it("should map transaction result code tx_bad_seq to 409 status code", () => {
+    it("maps a failed transaction submission (tx_bad_seq) to TransactionSubmissionFailed at 409", () => {
       const err = {
         response: {
           status: 400,
@@ -38,16 +38,16 @@ describe("ErrorHandler Middleware", () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: {
-          type: "HorizonError",
-          title: "Transaction Failed",
-          detail: "The transaction failed due to bad sequence.",
-          status: 400,
-          extras: err.response.data.extras,
+          type: "TransactionSubmissionFailed",
+          message: "Transaction failed.",
+          resultCodes: { transaction: "tx_bad_seq", operations: [] },
+          suggestion:
+            "Transaction sequence number does not match the account's current sequence. Reload the account and rebuild the transaction.",
         },
       });
     });
 
-    it("should map operation result code op_no_destination to 404 status code", () => {
+    it("maps a failed transaction submission (op_no_destination) to TransactionSubmissionFailed at 404", () => {
       const err = {
         response: {
           status: 400,
@@ -69,11 +69,11 @@ describe("ErrorHandler Middleware", () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: {
-          type: "HorizonError",
-          title: "Transaction Failed",
-          detail: "The destination account was not found.",
-          status: 400,
-          extras: err.response.data.extras,
+          type: "TransactionSubmissionFailed",
+          message: "Transaction failed.",
+          resultCodes: { transaction: null, operations: ["op_no_destination"] },
+          suggestion:
+            "The destination account does not exist. Create the account first with a createAccount operation.",
         },
       });
     });
@@ -105,6 +105,7 @@ describe("ErrorHandler Middleware", () => {
           detail: "An unknown result code was returned.",
           status: 418,
           extras: err.response.data.extras,
+          code: "tx_unknown_code_example",
         },
       });
     });
@@ -134,6 +135,271 @@ describe("ErrorHandler Middleware", () => {
         },
       });
     });
+
+    it("should include code and human-readable message for known result codes", () => {
+      const err = {
+        response: {
+          status: 400,
+          data: {
+            title: "Transaction Failed",
+            detail: "Bad sequence number.",
+            extras: { result_codes: { transaction: "tx_bad_seq" } },
+          },
+        },
+      };
+
+      errorHandler(err, req, res, next);
+
+      const body = res.json.mock.calls[0][0];
+      expect(body.success).toBe(false);
+      expect(body.error.type).toBe("HorizonError");
+      expect(body.error.code).toBe("tx_bad_seq");
+      expect(typeof body.error.message).toBe("string");
+      expect(body.error.message.length).toBeGreaterThan(0);
+    });
+
+    it("should include code and message for known operation result codes", () => {
+      const err = {
+        response: {
+          status: 400,
+          data: {
+            title: "Transaction Failed",
+            detail: "No destination.",
+            extras: { result_codes: { operations: ["op_no_destination"] } },
+          },
+        },
+      };
+
+      errorHandler(err, req, res, next);
+
+      const body = res.json.mock.calls[0][0];
+      expect(body.error.type).toBe("HorizonError");
+      expect(body.error.code).toBe("op_no_destination");
+      expect(body.error.message).toBeTruthy();
+    });
+
+    it("should omit code and message for unknown result codes", () => {
+      const err = {
+        response: {
+          status: 400,
+          data: {
+            title: "Transaction Failed",
+            detail: "Unknown code.",
+            extras: { result_codes: { transaction: "tx_unknown_xyz" } },
+          },
+        },
+      };
+
+      errorHandler(err, req, res, next);
+
+      const body = res.json.mock.calls[0][0];
+      expect(body.error.type).toBe("HorizonError");
+      expect(body.error).not.toHaveProperty("message");
+      // code is still present because resultCode is non-null
+      expect(body.error.code).toBe("tx_unknown_xyz");
+    });
+
+    it("should not throw a ReferenceError when handling a HorizonError", () => {
+      const err = {
+        response: {
+          status: 400,
+          data: {
+            title: "Transaction Failed",
+            detail: "Some detail.",
+            extras: { result_codes: { transaction: "tx_bad_seq" } },
+          },
+        },
+      };
+
+      expect(() => errorHandler(err, req, res, next)).not.toThrow();
+      expect(res.json).toHaveBeenCalled();
+      expect(res.json.mock.calls[0][0].success).toBe(false);
+    });
+
+    it("should use horizonError.status over err.response.status when present", () => {
+      const err = {
+        response: {
+          status: 400,
+          data: {
+            title: "Not Found",
+            detail: "Resource not found.",
+            status: 404,
+          },
+        },
+      };
+
+      errorHandler(err, req, res, next);
+
+      const body = res.json.mock.calls[0][0];
+      expect(body.error.status).toBe(404);
+    });
+
+    it("should default title and detail when missing from horizonError", () => {
+      const err = {
+        response: {
+          status: 400,
+          data: {},
+        },
+      };
+
+      errorHandler(err, req, res, next);
+
+      const body = res.json.mock.calls[0][0];
+      expect(body.error.title).toBe("Horizon Error");
+      expect(body.error.detail).toBe("An error occurred with the Stellar network.");
+      expect(body.error.extras).toBeNull();
+    });
+
+    describe("Account merge specific failures", () => {
+      beforeEach(() => {
+        req.path = "/account/GABC123456789012345678901234567890123456789012345678901234/merge";
+      });
+
+      it("returns AccountMergeFailed for op_does_not_exist", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Merge operation failed.",
+              extras: { result_codes: { operations: ["op_does_not_exist"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message: "Account merge failed because the destination account does not exist.",
+            resultCode: "op_does_not_exist",
+            suggestion:
+              "Use an existing funded destination account (G...) before retrying the merge.",
+          },
+        });
+      });
+
+      it("returns AccountMergeFailed for op_malformed", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Malformed operation.",
+              extras: { result_codes: { operations: ["op_malformed"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message: "Account merge failed because the operation payload is malformed.",
+            resultCode: "op_malformed",
+            suggestion:
+              "Check source/destination values and rebuild the transaction with a valid accountMerge operation.",
+          },
+        });
+      });
+
+      it("returns AccountMergeFailed for op_dest_full", () => {
+        const err = {
+          response: {
+            status: 400,
+            data: {
+              title: "Transaction Failed",
+              detail: "Destination full.",
+              extras: { result_codes: { operations: ["op_dest_full"] } },
+            },
+          },
+        };
+
+        errorHandler(err, req, res, next);
+
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: {
+            type: "AccountMergeFailed",
+            message:
+              "Account merge failed because the destination account cannot accept additional reserves or entries.",
+            resultCode: "op_dest_full",
+            suggestion:
+              "Free capacity on the destination account (remove subentries or use a different destination) and try again.",
+          },
+        });
+      });
+    });
+  });
+
+  describe("Horizon Timeout Errors", () => {
+    const horizonTimeoutBody = {
+      success: false,
+      error: {
+        type: "HorizonTimeout",
+        message: "The Stellar Horizon node did not respond in time.",
+        suggestion:
+          "Try again in a few seconds. If the issue persists check the Stellar network status at https://status.stellar.org.",
+      },
+    };
+
+    it("should return 504 with HorizonTimeout shape for timeout message errors", () => {
+      const err = new Error("Network timeout");
+
+      errorHandler(err, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(504);
+      expect(res.json).toHaveBeenCalledWith(horizonTimeoutBody);
+    });
+
+    it("should return 504 for ECONNABORTED errors", () => {
+      const err = new Error("timeout of 10000ms exceeded");
+      err.code = "ECONNABORTED";
+
+      errorHandler(err, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(504);
+      expect(res.json).toHaveBeenCalledWith(horizonTimeoutBody);
+    });
+
+    it("should return 504 for isHorizonTimeout flagged errors", () => {
+      const err = new Error("The Stellar Horizon node did not respond in time.");
+      err.isHorizonTimeout = true;
+
+      errorHandler(err, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(504);
+      expect(res.json).toHaveBeenCalledWith(horizonTimeoutBody);
+    });
+
+    it("should not treat Horizon HTTP errors as timeout", () => {
+      const err = {
+        response: {
+          status: 400,
+          data: {
+            title: "Transaction Failed",
+            detail: "Bad sequence.",
+          },
+        },
+      };
+
+      errorHandler(err, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.objectContaining({ type: "HorizonError" }),
+        })
+      );
+    });
   });
 
   describe("Validation Errors", () => {
@@ -157,6 +423,7 @@ describe("ErrorHandler Middleware", () => {
           field: "accountId",
           receivedValue: "G12345",
           expectedFormat: "G... public key",
+          suggestion: "Expected format: G... public key",
         },
       });
     });

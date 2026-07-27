@@ -50,13 +50,44 @@ try {
     }
     getAccount(id) { return this._get(`/account/${id}`); }
     getBalances(id) { return this._get(`/account/${id}/balances`); }
-    getTrustlines(id) { return this._get(`/account/${id}/trustlines`); }
+    getTrustlines(id, options) {
+      const params = new URLSearchParams();
+      if (options?.assetCode) params.set("asset_code", options.assetCode);
+      const query = params.toString();
+      const path = `/account/${id}/trustlines${query ? `?${query}` : ""}`;
+      return this._get(path);
+    }
+    getPayments(id, options) {
+      const params = new URLSearchParams();
+      if (options?.limit !== undefined) params.set("limit", String(options.limit));
+      if (options?.cursor) params.set("cursor", options.cursor);
+      const query = params.toString();
+      const path = `/account/${id}/payments${query ? `?${query}` : ""}`;
+      return this._get(path);
+    }
     async getSigners(id) {
       const account = await this._get(`/account/${id}`);
       return { accountId: account.accountId, signers: account.signers, thresholds: account.thresholds };
     }
+    getSigningKeys(id) { return this._get(`/account/${id}/signing-keys`); }
     getAge(id) { return this._get(`/account/${id}/age`); }
     getRiskScore(id) { return this._get(`/account/${id}/risk-score`); }
+    getSequence(id) { return this._get(`/account/${id}/sequence`); }
+    getAccountData(id) { return this.getAccount(id); }
+    getOffers(id, options) {
+      const params = new URLSearchParams();
+      if (options?.limit !== undefined) params.set("limit", String(options.limit));
+      if (options?.cursor) params.set("cursor", options.cursor);
+      const query = params.toString();
+      const path = `/account/${id}/offers${query ? `?${query}` : ""}`;
+      return this._get(path);
+    }
+    async getSponsorships(id) {
+      if (!id || typeof id !== "string" || id.trim() === "") {
+        throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+      }
+      return this._get(`/account/${id}/sponsorships`);
+    }
   };
 }
 
@@ -126,6 +157,57 @@ const RISK_DATA = {
   score: 75,
   label: "low",
   factors: [{ name: "Account Age", value: "365 days", impact: "positive", detail: "Over a year old." }],
+};
+
+const SIGNING_KEYS_DATA = {
+  signers: [{ key: ACCOUNT_ID, type: "ed25519_public_key", weight: 1, sponsoredBy: null }],
+  masterWeight: 1,
+  thresholds: { lowThreshold: 0, medThreshold: 0, highThreshold: 0 },
+};
+
+const PAYMENTS_DATA = {
+  items: [
+    {
+      type: "payment",
+      amount: "10.0000000",
+      asset: { code: "XLM", issuer: null, type: "native" },
+      sender: ACCOUNT_ID,
+      receiver: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      createdAt: "2024-01-01T00:00:00Z",
+    },
+  ],
+  total: 1,
+  limit: 10,
+  cursor: "12345",
+};
+
+const OFFERS_DATA = {
+  items: [
+    {
+      id: "123",
+      selling: { assetType: "native", assetCode: "XLM", assetIssuer: null, amount: "100.0000000" },
+      buying: { assetType: "credit_alphanum4", assetCode: "USDC", assetIssuer: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN" },
+      price: "1.5",
+      lastModifiedLedger: 12345,
+    },
+  ],
+  total: 1,
+  limit: 10,
+  cursor: "54321",
+};
+
+const SPONSORSHIPS_DATA = {
+  accountId: ACCOUNT_ID,
+  sponsoredBy: [
+    {
+      type: "trustline",
+      address: "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      sponsor: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      reserveAmount: "0.5000000",
+    },
+  ],
+  sponsoring: ["GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"],
+  count: 1,
 };
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -238,6 +320,53 @@ describe("AccountModule", () => {
       mockFetch(500, { success: false, error: { message: "Server error", type: "SERVER_ERROR" } });
       await expect(module.getTrustlines(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
     });
+
+    it("passes assetCode as query param when provided", async () => {
+      mockFetch(200, { success: true, data: TRUSTLINES_DATA });
+      await module.getTrustlines(ACCOUNT_ID, { assetCode: "USDC" });
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/trustlines?asset_code=USDC`,
+        expect.any(Object),
+      );
+    });
+
+    it("omits query param when assetCode is not provided", async () => {
+      mockFetch(200, { success: true, data: TRUSTLINES_DATA });
+      await module.getTrustlines(ACCOUNT_ID);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/trustlines`,
+        expect.any(Object),
+      );
+    });
+  });
+
+  // ── getPayments ───────────────────────────────────────────────────────────
+
+  describe("getPayments", () => {
+    it("calls GET /account/:id/payments and resolves data", async () => {
+      mockFetch(200, { success: true, data: PAYMENTS_DATA });
+      const data = await module.getPayments(ACCOUNT_ID);
+      expect(data.items).toHaveLength(1);
+      expect(data.total).toBe(1);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/payments`,
+        expect.any(Object),
+      );
+    });
+
+    it("passes limit and cursor as query params", async () => {
+      mockFetch(200, { success: true, data: PAYMENTS_DATA });
+      await module.getPayments(ACCOUNT_ID, { limit: 5, cursor: "abc123" });
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/payments?limit=5&cursor=abc123`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError on failure", async () => {
+      mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
+      await expect(module.getPayments(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
+    });
   });
 
   // ── getSigners ─────────────────────────────────────────────────────────────
@@ -260,6 +389,27 @@ describe("AccountModule", () => {
     it("throws StellarKitError when account not found", async () => {
       mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
       await expect(module.getSigners(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
+    });
+  });
+
+  // ── getSigningKeys ────────────────────────────────────────────────────────
+
+  describe("getSigningKeys", () => {
+    it("calls GET /account/:id/signing-keys and resolves data", async () => {
+      mockFetch(200, { success: true, data: SIGNING_KEYS_DATA });
+      const data = await module.getSigningKeys(ACCOUNT_ID);
+      expect(Array.isArray(data.signers)).toBe(true);
+      expect(data.masterWeight).toBe(1);
+      expect(data.thresholds).toEqual(SIGNING_KEYS_DATA.thresholds);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/signing-keys`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError on failure", async () => {
+      mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
+      await expect(module.getSigningKeys(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
     });
   });
 
@@ -304,9 +454,139 @@ describe("AccountModule", () => {
     });
   });
 
-  // ── API key forwarding ─────────────────────────────────────────────────────
+  // ── getSequence ─────────────────────────────────────────────────────────
 
-  describe("API key header", () => {
+  describe("getSequence", () => {
+    it("calls GET /account/:id/sequence and resolves data", async () => {
+      const sequenceData = { accountId: ACCOUNT_ID, sequence: "123", lastModifiedLedger: 100 };
+      mockFetch(200, { success: true, data: sequenceData });
+      const data = await module.getSequence(ACCOUNT_ID);
+      expect(data.sequence).toBe("123");
+      expect(data.lastModifiedLedger).toBe(100);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/sequence`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError on failure", async () => {
+      mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
+      await expect(module.getSequence(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
+    });
+  });
+
+  // ── getAccountData ────────────────────────────────────────────────────────
+
+  describe("getAccountData", () => {
+    it("calls GET /account/:id and resolves data (alias for getAccount)", async () => {
+      mockFetch(200, { success: true, data: ACCOUNT_DATA });
+      const data = await module.getAccountData(ACCOUNT_ID);
+      expect(data.accountId).toBe(ACCOUNT_ID);
+      expect(data.signers).toHaveLength(1);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError on failure", async () => {
+      mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
+      await expect(module.getAccountData(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
+    });
+  });
+
+  // ── getOffers ──────────────────────────────────────────────────────────────
+
+  describe("getOffers", () => {
+    it("calls GET /account/:id/offers and resolves data", async () => {
+      mockFetch(200, { success: true, data: OFFERS_DATA });
+      const data = await module.getOffers(ACCOUNT_ID);
+      expect(data.items).toHaveLength(1);
+      expect(data.total).toBe(1);
+      expect(data.items[0].id).toBe("123");
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/offers`,
+        expect.any(Object),
+      );
+    });
+
+    it("passes limit and cursor as query params", async () => {
+      mockFetch(200, { success: true, data: OFFERS_DATA });
+      await module.getOffers(ACCOUNT_ID, { limit: 50, cursor: "abc123" });
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/offers?limit=50&cursor=abc123`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError on failure", async () => {
+      mockFetch(404, { success: false, error: { message: "Not found", type: "NOT_FOUND" } });
+      await expect(module.getOffers(ACCOUNT_ID)).rejects.toThrow(StellarKitError);
+    });
+  });
+
+  // ── getSponsorships ────────────────────────────────────────────────────────
+
+  describe("getSponsorships", () => {
+    it("calls GET /account/:id/sponsorships and resolves data", async () => {
+      mockFetch(200, { success: true, data: SPONSORSHIPS_DATA });
+      const data = await module.getSponsorships(ACCOUNT_ID);
+      expect(data.accountId).toBe(ACCOUNT_ID);
+      expect(data.count).toBe(1);
+      expect(Array.isArray(data.sponsoredBy)).toBe(true);
+      expect(data.sponsoredBy[0].type).toBe("trustline");
+      expect(data.sponsoredBy[0].address).toBe(
+        "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      );
+      expect(data.sponsoredBy[0].reserveAmount).toBe("0.5000000");
+      expect(Array.isArray(data.sponsoring)).toBe(true);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/account/${ACCOUNT_ID}/sponsorships`,
+        expect.any(Object),
+      );
+    });
+
+    it("throws StellarKitError with status 400 when id is empty", async () => {
+      await expect(module.getSponsorships("")).rejects.toThrow(StellarKitError);
+      try {
+        await module.getSponsorships("");
+      } catch (err) {
+        expect(err.status).toBe(400);
+        expect(err.type).toBe("ValidationError");
+      }
+    });
+
+    it("throws StellarKitError with status 400 when id is whitespace", async () => {
+      await expect(module.getSponsorships("   ")).rejects.toThrow(StellarKitError);
+    });
+
+    it("throws StellarKitError on non-2xx API response (e.g. 404)", async () => {
+      mockFetch(404, {
+        success: false,
+        error: { message: "Account not found", type: "AccountNotFound" },
+      });
+      try {
+        await module.getSponsorships(ACCOUNT_ID);
+        fail("Expected StellarKitError to be thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(StellarKitError);
+        expect(err.status).toBe(404);
+        expect(err.type).toBe("AccountNotFound");
+        expect(err.message).toBe("Account not found");
+      }
+    });
+
+    it("returns empty sponsoredBy and sponsoring arrays when account has no sponsorships", async () => {
+      const empty = { accountId: ACCOUNT_ID, sponsoredBy: [], sponsoring: [], count: 0 };
+      mockFetch(200, { success: true, data: empty });
+      const data = await module.getSponsorships(ACCOUNT_ID);
+      expect(data.sponsoredBy).toHaveLength(0);
+      expect(data.sponsoring).toHaveLength(0);
+      expect(data.count).toBe(0);
+    });
+  });
+
+  // ── API key forwarding ─────────────────────────────────────────────────────  describe("API key header", () => {
     it("sends X-API-Key header when apiKey is provided", async () => {
       const m = new AccountModule({ baseUrl: BASE_URL, apiKey: "test-key" });
       mockFetch(200, { success: true, data: ACCOUNT_DATA });

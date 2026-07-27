@@ -1,5 +1,5 @@
 const request = require('supertest');
-const { feeEstimateCache } = require('../src/utils/cache');
+const cacheService = require('../src/services/cache');
 
 let app;
 let server;
@@ -20,7 +20,7 @@ describe('GET /fee-estimate', () => {
 
     ({ server } = require('../src/config/stellar'));
     app = require('../src/index');
-    feeEstimateCache.clear();
+    cacheService.flush();
   });
 
   it('includes new fields in the response', async () => {
@@ -69,12 +69,12 @@ describe('GET /fee-estimate', () => {
     expect(data.history).toHaveLength(5);
     expect(data.history[0]).toEqual({
       ledger: 500,
-      baseFee: 100,
+      baseFee: "100.0000000",
       capacityUsage: 0.1,
     });
     expect(data.history[4]).toEqual({
       ledger: 496,
-      baseFee: 140,
+      baseFee: "140.0000000",
       capacityUsage: 0.5,
     });
   });

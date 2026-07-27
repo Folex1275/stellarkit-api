@@ -5,8 +5,26 @@ import type {
   AccountSignersResponse,
   AccountAgeResponse,
   AccountRiskScoreResponse,
-  AccountClaimableBalancesResponse,
+  AccountTransactionCountResponse,
+  AccountSequenceResponse,
+  TrustlineEntry,
+  PaymentOperation,
+  Signer,
 } from "../types/index.d";
+
+/** Transaction count summary returned by `AccountModule.getTransactionCount`. */
+export type TransactionCount = AccountTransactionCountResponse["data"];
+
+/** Sequence details returned by `AccountModule.getSequence`. */
+export type SequenceData = AccountSequenceResponse["data"];
+
+/** Paginated response returned by list endpoints. */
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  cursor: string | null;
+}
 
 /** Typed error thrown by AccountModule on non-2xx API responses. */
 export class StellarKitError extends Error {
@@ -21,6 +39,51 @@ export class StellarKitError extends Error {
     this.status = status;
     this.type = type;
   }
+}
+
+/**
+ * Native XLM balance details returned by GET /account/:id/native-balance.
+ */
+export interface NativeBalance {
+  /** Current XLM balance as a seven-decimal string (e.g. "9.9999800"). */
+  balance: string;
+  /** XLM reserved for buying liabilities. */
+  buyingLiabilities: string;
+  /** XLM reserved for selling liabilities. */
+  sellingLiabilities: string;
+}
+
+/**
+ * A single sponsored entry for an account.
+ */
+export interface SponsoredEntry {
+  /** Type of the sponsored entry (e.g. "trustline", "signer", "data_entry"). */
+  type: string;
+  /** Asset identifier for trustlines (e.g. "USDC:GA5Z...") or key for signers/data. */
+  address?: string;
+  /** Key for signers or data entries. */
+  key?: string;
+  /** Asset code and issuer for trustlines. */
+  asset?: string;
+  /** Stellar account address sponsoring this entry. */
+  sponsor: string;
+  /** XLM amount reserved for this sponsored entry. */
+  reserveAmount?: string;
+}
+
+/**
+ * Sponsorship details for an account.
+ * Contains both entries sponsored by others and accounts this account is sponsoring.
+ */
+export interface Sponsorships {
+  /** Stellar account public key. */
+  accountId: string;
+  /** Entries on this account that are sponsored by other accounts. */
+  sponsoredBy: SponsoredEntry[];
+  /** Accounts that this account is currently sponsoring. */
+  sponsoring: string[];
+  /** Total number of sponsored entries. */
+  count: number;
 }
 
 /**
@@ -70,12 +133,39 @@ export class AccountModule {
   /**
    * Get full account details including XLM balance, assets, signers, thresholds, and flags.
    *
-   * @param id - Stellar account public key.
+   * @param id - Stellar account public key (non-empty string).
    * @returns Resolves to the account data payload.
-   * @throws {StellarKitError} On non-2xx response (e.g. 404 account not found).
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response (e.g. 404).
+   *
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const details = await account.getAccount("GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN");
+   * console.log(details.xlm.balance); // "9.9999800"
    */
   async getAccount(id: string): Promise<AccountResponse["data"]> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
     return this._get<AccountResponse["data"]>(`/account/${id}`);
+  }
+
+  /**
+   * Get the native XLM balance for an account.
+   *
+   * @param id - Stellar account public key (non-empty string).
+   * @returns Resolves to XLM balance with liabilities.
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response (e.g. 404).
+   *
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const native = await account.getNativeBalance("GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN");
+   * console.log(native.balance); // "9.9999800"
+   */
+  async getNativeBalance(id: string): Promise<NativeBalance> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
+    return this._get<NativeBalance>(`/account/${id}/native-balance`);
   }
 
   /**
@@ -93,11 +183,50 @@ export class AccountModule {
    * Get all trustlines for an account with TOML metadata resolved from issuer home domains.
    *
    * @param id - Stellar account public key.
+   * @param options - Optional filtering options.
+   * @param options.assetCode - Filter trustlines by asset code (e.g. "USDC").
    * @returns Resolves to an array of trustline entries.
    * @throws {StellarKitError} On non-2xx response.
+   *
+   * @example
+   * const trustlines = await account.getTrustlines("GAAZI4...");
+   * const usdcOnly = await account.getTrustlines("GAAZI4...", { assetCode: "USDC" });
    */
-  async getTrustlines(id: string): Promise<AccountTrustlinesResponse["data"]> {
-    return this._get<AccountTrustlinesResponse["data"]>(`/account/${id}/trustlines`);
+  async getTrustlines(
+    id: string,
+    options?: { assetCode?: string },
+  ): Promise<TrustlineEntry[]> {
+    const params = new URLSearchParams();
+    if (options?.assetCode) params.set("asset_code", options.assetCode);
+    const query = params.toString();
+    const path = `/account/${id}/trustlines${query ? `?${query}` : ""}`;
+    return this._get<TrustlineEntry[]>(path);
+  }
+
+  /**
+   * Get payment and create_account operations for an account.
+   *
+   * @param id - Stellar account public key.
+   * @param options - Optional pagination options.
+   * @param options.limit - Maximum number of records to return.
+   * @param options.cursor - Pagination cursor from a previous response.
+   * @returns Resolves to a paginated response containing payment operations.
+   * @throws {StellarKitError} On non-2xx response.
+   *
+   * @example
+   * const payments = await account.getPayments("GAAZI4...");
+   * const page2 = await account.getPayments("GAAZI4...", { limit: 10, cursor: "12345" });
+   */
+  async getPayments(
+    id: string,
+    options?: { limit?: number; cursor?: string },
+  ): Promise<PaginatedResponse<PaymentOperation>> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    const path = `/account/${id}/payments${query ? `?${query}` : ""}`;
+    return this._get<PaginatedResponse<PaymentOperation>>(path);
   }
 
   /**
@@ -112,6 +241,28 @@ export class AccountModule {
   async getSigners(id: string): Promise<AccountSignersResponse["data"]> {
     const account = await this._get<AccountResponse["data"]>(`/account/${id}`);
     return { accountId: account.accountId, signers: account.signers, thresholds: account.thresholds };
+  }
+
+  /**
+   * Get account signing key configuration.
+   *
+   * Calls `GET /account/:id/signing-keys` and returns account signers,
+   * master key weight, and operation thresholds.
+   *
+   * @param id - Stellar account public key (non-empty string).
+   * @returns Resolves to account signing key configuration.
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response.
+   *
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const signingKeys = await account.getSigningKeys("GAAZI4...");
+   * console.log(signingKeys.masterWeight);
+   */
+  async getSigningKeys(id: string): Promise<SigningKeys> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
+    return this._get<SigningKeys>(`/account/${id}/signing-keys`);
   }
 
   /**
@@ -137,23 +288,117 @@ export class AccountModule {
   }
 
   /**
-   * Get claimable balances for an account with pagination support.
+   * Get the total transaction count for an account, plus the timestamps of
+   * its first and last transactions — a lightweight summary that avoids
+   * paginating through the full transaction history.
    *
    * @param id - Stellar account public key.
-   * @param options - Optional pagination parameters.
-   * @returns Resolves to a paginated list of claimable balances.
-   * @throws {StellarKitError} On non-2xx response.
+   * @returns Resolves to `{ count, firstTransactionAt, lastTransactionAt }`.
+   * @throws {StellarKitError} On non-2xx response (e.g. 404 account not found).
+   *
+   * @example
+   * const { count, firstTransactionAt } = await account.getTransactionCount("GAAZI4...");
+   * console.log(`${count} transactions since ${firstTransactionAt}`);
+   */
+  async getTransactionCount(id: string): Promise<TransactionCount> {
+    return this._get<TransactionCount>(`/account/${id}/transaction-count`);
+  }
+
+  /**
+   * Get the current sequence number and last modified ledger for an account.
+   *
+   * @param id - Stellar account public key (non-empty string).
+   * @returns Resolves to the sequence payload including `accountId`, `sequence`, and `lastModifiedLedger`.
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response.
+   *
    * @example
    * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
-   * const balances = await account.getClaimableBalances("GAAZI4...");
+   * const sequence = await account.getSequence("GAAZI4...");
+   * console.log(sequence.sequence); // "123"
    */
-  async getClaimableBalances(
+  async getSequence(id: string): Promise<SequenceData> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
+    return this._get<SequenceData>(`/account/${id}/sequence`);
+  }
+
+  /**
+   * Get full account data including balances, signers, and all metadata.
+   *
+   * Alias for getAccount — returns complete account information.
+   *
+   * @param id - Stellar account public key.
+   * @returns Resolves to the full account data payload.
+   * @throws {StellarKitError} On non-2xx response.
+   */
+  async getAccountData(id: string): Promise<AccountResponse["data"]> {
+    return this.getAccount(id);
+  }
+
+  /**
+   * Get the sponsorship relationships for an account.
+   *
+   * Resolves both the entries on this account that are sponsored by other accounts
+   * (sponsoredBy) and the accounts that this account is currently sponsoring (sponsoring).
+   *
+   * Calls `GET /account/:id/sponsorships`.
+   *
+   * @param id - Stellar account public key (non-empty string starting with G).
+   * @returns Resolves to a Sponsorships object with `sponsoring` and `sponsoredBy` arrays.
+   * @throws {StellarKitError} If `id` is missing/empty, or on a non-2xx API response (e.g. 404 when the account does not exist).
+   *
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const sponsorships = await account.getSponsorships(
+   *   "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+   * );
+   * console.log(sponsorships.count);               // number of sponsored entries
+   * console.log(sponsorships.sponsoredBy);          // entries sponsored by others
+   * console.log(sponsorships.sponsoring);           // accounts this account sponsors
+   */
+  async getSponsorships(id: string): Promise<Sponsorships> {
+    if (!id || typeof id !== "string" || id.trim() === "") {
+      throw new StellarKitError("id is required and must be a non-empty string", 400, "ValidationError");
+    }
+    return this._get<Sponsorships>(`/account/${id}/sponsorships`);
+  }
+
+  /**
+   * Get all open offers for an account.
+   *
+   * @param id - Stellar account public key.
+   * @param options - Optional pagination and filtering options.
+   * @param options.limit - Maximum number of records to return (default: 10, max: 200).
+   * @param options.cursor - Pagination cursor from a previous response.
+   * @returns Resolves to a paginated response containing offer records.
+   * @throws {StellarKitError} On non-2xx response.
+   *
+   * @example
+   * const offers = await account.getOffers("GAAZI4...");
+   * const page2 = await account.getOffers("GAAZI4...", { limit: 50, cursor: "12345" });
+   */
+  async getOffers(
     id: string,
     options?: { limit?: number; cursor?: string },
-  ): Promise<AccountClaimableBalancesResponse["data"]> {
-    return this._get<AccountClaimableBalancesResponse["data"]>(`/account/${id}/claimable-balances`, {
-      limit: options?.limit,
-      cursor: options?.cursor,
-    });
+  ): Promise<PaginatedResponse<{
+    id: string;
+    selling: { assetType: string; assetCode: string; assetIssuer: string | null; amount: string };
+    buying: { assetType: string; assetCode: string; assetIssuer: string | null };
+    price: string;
+    lastModifiedLedger: number;
+  }>> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    const path = `/account/${id}/offers${query ? `?${query}` : ""}`;
+    return this._get<PaginatedResponse<{
+      id: string;
+      selling: { assetType: string; assetCode: string; assetIssuer: string | null; amount: string };
+      buying: { assetType: string; assetCode: string; assetIssuer: string | null };
+      price: string;
+      lastModifiedLedger: number;
+    }>>(path);
   }
 }

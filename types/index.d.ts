@@ -295,6 +295,19 @@ export interface AccountAgeResponse {
 }
 
 /**
+ * Response from GET /account/:id/sequence
+ * Returns the current sequence number and last modified ledger for a Stellar account.
+ */
+export interface AccountSequenceResponse {
+  success: true
+  data: {
+    accountId: StellarPublicKey
+    sequence: string
+    lastModifiedLedger: number
+  }
+}
+
+/**
  * Response from GET /account/:id/balances
  * Returns only native XLM and asset balances for a Stellar account.
  */
@@ -676,6 +689,20 @@ export interface AccountRiskScoreResponse {
     score: number
     label: string
     factors: RiskFactor[]
+  }
+}
+
+/**
+ * Response from GET /account/:id/transaction-count
+ * Returns the total transaction count for an account along with the
+ * timestamps of its first and last transactions.
+ */
+export interface AccountTransactionCountResponse {
+  success: true
+  data: {
+    count: number
+    firstTransactionAt: ISOTimestamp | null
+    lastTransactionAt: ISOTimestamp | null
   }
 }
 

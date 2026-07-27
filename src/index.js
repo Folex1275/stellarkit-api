@@ -6,20 +6,22 @@ const cors = require("cors");
 const morgan = require("morgan");
 const compression = require("compression");
 
+const logger = require("./utils/logger");
 const { setupWebSocket } = require("./websocket");
 const { server } = require("./config/stellar");
-const { networkStatusCache, feeEstimateCache } = require("./utils/cache");
+const cacheService = require("./services/cache");
+const networkStatusCache = cacheService;
+const feeEstimateCache = cacheService;
 
 const rateLimiter = require("./middleware/rateLimiter");
 const contentTypeValidator = require("./middleware/contentTypeValidator");
 const bodySizeLimit = require("./middleware/bodySizeLimit");
 const errorHandler = require("./middleware/errorHandler");
-<<<<<<< HEAD
 const requestIdMiddleware = require("./middleware/requestId");
-=======
 const apiKeyMiddleware = require("./middleware/apiKeyAuth");
 const sanitize = require("./middleware/sanitize");
->>>>>>> f13de3bc2aa5b1589ee41cb19e8aeead312a3b96
+const coerceQueryParams = require("./middleware/coerceQueryParams");
+const etagMiddleware = require("./middleware/etag");
 
 const networkStatusRouter = require("./routes/networkStatus");
 const feeEstimateRouter = require("./routes/feeEstimate");
@@ -32,11 +34,21 @@ const streamRouter = require("./routes/stream");
 const utilsRouter = require("./routes/utils");
 const stellarTomlRouter = require("./routes/stellarToml");
 const claimableBalancesRouter = require("./routes/claimableBalances");
+const cacheStatsRouter = require("./routes/cacheStats");
+const sorobanRouter = require("./routes/soroban");
+const networkRouter = require("./routes/network");
 
 const app = express();
+// Disable server identification header for security
+app.disable("x-powered-by");
+const { normalizeAmountFields } = require("./utils/response");
+
 const PORT = process.env.PORT || 3000;
 
-async function warmNetworkStatusCache({ logger = console, horizonServer = server } = {}) {
+async function warmNetworkStatusCache({
+  logger: customLogger = logger,
+  horizonServer = server,
+} = {}) {
   const ledger = await horizonServer.ledgers().order("desc").limit(1).call();
   const latest = ledger.records[0];
 
@@ -62,11 +74,14 @@ async function warmNetworkStatusCache({ logger = console, horizonServer = server
     },
   };
 
-  networkStatusCache.set("network-status", data);
-  logger.log("[CACHE WARM] /network-status");
+  cacheService.set("network-status", data);
+  customLogger.info("[CACHE WARM] /network-status");
 }
 
-async function warmFeeEstimateCache({ logger = console, horizonServer = server } = {}) {
+async function warmFeeEstimateCache({
+  logger: customLogger = logger,
+  horizonServer = server,
+} = {}) {
   const feeStats = await horizonServer.feeStats();
   const operations = 1;
 
@@ -97,7 +112,9 @@ async function warmFeeEstimateCache({ logger = console, horizonServer = server }
     totalFee: {
       economy: {
         stroops: parseInt(feeStats.fee_charged.min) * operations,
-        xlm: ((parseInt(feeStats.fee_charged.min) * operations) / 1e7).toFixed(7),
+        xlm: ((parseInt(feeStats.fee_charged.min) * operations) / 1e7).toFixed(
+          7,
+        ),
       },
       standard: {
         stroops: recommended * operations,
@@ -119,29 +136,36 @@ async function warmFeeEstimateCache({ logger = console, horizonServer = server }
     },
   };
 
-  feeEstimateCache.set("fee-estimate:1", data);
-  logger.log("[CACHE WARM] /fee-estimate");
+  cacheService.set("fee-estimate:1", data);
+  customLogger.info("[CACHE WARM] /fee-estimate");
 }
 
-async function warmStartupCaches({ logger = console, horizonServer = server } = {}) {
+async function warmStartupCaches({
+  logger: customLogger = logger,
+  horizonServer = server,
+} = {}) {
   const warmers = [
-    warmNetworkStatusCache({ logger, horizonServer }),
-    warmFeeEstimateCache({ logger, horizonServer }),
+    warmNetworkStatusCache({ logger: customLogger, horizonServer }),
+    warmFeeEstimateCache({ logger: customLogger, horizonServer }),
   ];
 
   const results = await Promise.allSettled(warmers);
   results.forEach((result, index) => {
     if (result.status === "rejected") {
       const endpoint = index === 0 ? "/network-status" : "/fee-estimate";
-      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-      logger.error(`[CACHE WARM] failed ${endpoint}: ${reason}`);
+      const reason =
+        result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason);
+      customLogger.error(`[CACHE WARM] failed ${endpoint}: ${reason}`);
     }
   });
 }
 
 // ── Security & Parsing ──────────────────────────────────────────────────────
 app.use(helmet());
-app.use(compression({ threshold: 0 }));
+// Skip compression for responses smaller than 1 KB — gzip headers alone can exceed tiny payloads
+app.use(compression({ threshold: 1024 }));
 app.use(cors());
 app.use(requestIdMiddleware);
 app.use(contentTypeValidator);
@@ -160,7 +184,7 @@ app.use(
       tokens["response-time"](req, res),
       "ms",
     ].join(" ");
-  })
+  }),
 );
 
 // ── Rate Limiting ───────────────────────────────────────────────────────────
@@ -168,6 +192,12 @@ app.use(rateLimiter);
 
 // ── Input Sanitization ──────────────────────────────────────────────────────
 app.use(sanitize);
+app.use(coerceQueryParams);
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (payload) => originalJson(normalizeAmountFields(payload));
+  next();
+});
 
 // ── Health Check ────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
@@ -188,20 +218,29 @@ app.use(apiKeyMiddleware);
 
 // ── API Routes ───────────────────────────────────────────────────────────────
 app.use("/network-status", networkStatusRouter);
+app.use("/network", networkStatusRouter);
 app.use("/fee-estimate", feeEstimateRouter);
+// Apply ETag middleware to cached endpoints
+app.use("/network-status", etagMiddleware, networkStatusRouter);
+app.use("/fee-estimate", etagMiddleware, feeEstimateRouter);
 const accountCounterpartiesRouter = require("./routes/account.counterparties");
-app.use("/account", accountRouter);
-app.use("/account", accountCounterpartiesRouter);
+app.use("/account", etagMiddleware, accountRouter);
+app.use("/account", etagMiddleware, accountCounterpartiesRouter);
 app.use("/transactions", transactionsRouter);
-app.use("/asset", assetRouter);
-app.use("/dex", dexRouter);
-app.use("/liquidity-pools", liquidityPoolRouter);
+app.use("/asset", etagMiddleware, assetRouter);
+app.use("/dex", etagMiddleware, dexRouter);
+app.use("/liquidity-pools", etagMiddleware, liquidityPoolRouter);
 app.use("/stream", streamRouter);
 app.use("/utils", utilsRouter);
 app.use("/stellar-toml", stellarTomlRouter);
-app.use("/claimable-balances", claimableBalancesRouter);
+app.use("/claimable-balances", etagMiddleware, claimableBalancesRouter);
+app.use("/cache", cacheStatsRouter);
+app.use("/soroban", sorobanRouter);
+app.use("/network", etagMiddleware, networkRouter);
+const transactionEffectsRouter = require("./routes/transaction.effects");
+app.use("/transaction", etagMiddleware, transactionEffectsRouter);
 
-// ── Root ─────────────────────────────────────────────────────────────────────
+// ── Root
 app.get("/", (req, res) => {
   res.json({
     success: true,
@@ -212,17 +251,6 @@ app.get("/", (req, res) => {
       version: require("../package.json").version,
       network: process.env.STELLAR_NETWORK || "testnet",
       endpoints: [
-        { method: "GET", path: "/health",                           description: "Service health check" },
-        { method: "GET", path: "/network-status",                   description: "Latest ledger, fees, and protocol info" },
-        { method: "GET", path: "/fee-estimate",                     description: "Fee tiers for transaction submission" },
-        { method: "GET", path: "/fee-estimate?operations=N",        description: "Fee estimate for N operations" },
-        { method: "GET", path: "/account/:id",                      description: "Account details, balances, signers" },
-        { method: "GET", path: "/account/:id/trustlines",           description: "Trustlines with TOML asset metadata resolved" },
-        { method: "GET", path: "/transactions/:id",                 description: "Transaction history for an account" },
-        { method: "GET", path: "/transactions/:id/operations",      description: "Operation history for an account" },
-        { method: "GET", path: "/asset/:code/:issuer",              description: "Asset metadata and statistics" },
-        { method: "GET", path: "/asset/search?code=:code",          description: "Search assets by code across all issuers" },
-        { method: "WS",  path: "/stream/ledgers",                  description: "Real-time stream of live Stellar ledger updates" },
         { method: "GET", path: "/health", description: "Service health check" },
         { method: "GET", path: "/network-status", description: "Latest ledger, fees, and protocol info" },
         { method: "GET", path: "/fee-estimate", description: "Fee tiers for transaction submission" },
@@ -260,6 +288,320 @@ app.get("/", (req, res) => {
         { method: "GET", path: "/utils/convert?xlm=:xlm", description: "Convert between XLM and stroops" },
         { method: "GET", path: "/utils/validate-account?id=:id", description: "Validate a Stellar public key format (no Horizon call)" },
         { method: "WS", path: "/stream/ledgers", description: "Real-time stream of live Stellar ledger updates" },
+        { method: "GET", path: "/cache/stats", description: "Cache hit rate and performance statistics" },
+        { method: "GET", path: "/soroban/contract/:id", description: "Soroban contract instance details (executable type, wasm hash)" },
+        { method: "GET", path: "/soroban/contract/:id/storage", description: "Soroban contract instance-storage entries" },
+        {
+          method: "GET",
+          path: "/network-status",
+          description: "Latest ledger, fees, and protocol info",
+        },
+        {
+          method: "GET",
+          path: "/fee-estimate",
+          description: "Fee tiers for transaction submission",
+        },
+        {
+          method: "GET",
+          path: "/fee-estimate?operations=N",
+          description: "Fee estimate for N operations",
+        },
+        {
+          method: "GET",
+          path: "/account/:id",
+          description: "Account details, balances, signers",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/balances",
+          description: "XLM and asset balances for an account",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/offers",
+          description:
+            "Open offers for an account (use ?offerId=N for a specific offer)",
+        },
+        {
+          method: "GET",
+          path: "/transactions/:id",
+          description: "Transaction history for an account",
+        },
+        {
+          method: "GET",
+          path: "/transactions/:id/operations",
+          description: "Operation history for an account",
+        },
+        {
+          method: "GET",
+          path: "/asset/:code/:issuer",
+          description: "Asset metadata and statistics",
+        },
+        {
+          method: "GET",
+          path: "/asset/:code/:issuer/holders",
+          description: "Paginated accounts holding an asset",
+        },
+        {
+          method: "GET",
+          path: "/asset/search?code=:code",
+          description: "Search assets by code across all issuers",
+        },
+        {
+          method: "GET",
+          path: "/utils/friendbot/:accountId",
+          description: "Fund a testnet account via Friendbot (testnet only)",
+        },
+        {
+          method: "WS",
+          path: "/stream/ledgers",
+          description: "Real-time stream of live Stellar ledger updates",
+        },
+        { method: "GET", path: "/health", description: "Service health check" },
+        {
+          method: "GET",
+          path: "/network-status",
+          description: "Latest ledger, fees, and protocol info",
+        },
+        {
+          method: "GET",
+          path: "/fee-estimate",
+          description: "Fee tiers for transaction submission",
+        },
+        {
+          method: "GET",
+          path: "/fee-estimate?operations=N",
+          description: "Fee estimate for N operations",
+        },
+        {
+          method: "GET",
+          path: "/account/:id",
+          description: "Account details, balances, signers",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/trustlines",
+          description: "Trustlines with TOML asset metadata resolved",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/effects",
+          description: "Effects history for an account (normalized, paginated)",
+        },
+
+        {
+          method: "GET",
+          path: "/transaction/:hash/effects",
+          description:
+            "Ledger effects produced by a transaction hash (normalized)",
+        },
+
+        {
+          method: "GET",
+          path: "/transactions/:id",
+          description: "Transaction history for an account",
+        },
+        {
+          method: "GET",
+          path: "/transactions/:id/operations",
+          description: "Operation history for an account",
+        },
+        {
+          method: "GET",
+          path: "/fee-estimate/surge-status",
+          description:
+            "Identify fee surge periods and get actionable recommendations",
+        },
+
+        {
+          method: "GET",
+          path: "/fee-estimate/trends",
+          description:
+            "Analyze fee trends across last 50 ledgers with statistical summary",
+        },
+
+        {
+          method: "GET",
+          path: "/account/:id/age",
+          description: "Account age and longevity metrics",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/balances",
+          description: "XLM and asset balances for an account",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/sequence",
+          description: "Current sequence number for an account",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/trades",
+          description: "Trade history for an account with pagination",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/freeze-status/:assetCode/:assetIssuer",
+          description: "Check if an asset is frozen on an account",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/can-receive/:assetCode/:assetIssuer",
+          description: "Check if an account can receive a specific asset",
+        },
+        {
+          method: "POST",
+          path: "/account/:id/multisig-plan",
+          description:
+            "Plan multisig transactions by calculating signer combinations for each threshold",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/pool-positions",
+          description: "Calculate liquidity pool positions and share values",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/transactions/search",
+          description: "Search account transactions by memo content",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/volume",
+          description: "Total transaction volume by asset over a time period",
+        },
+        {
+          method: "GET",
+          path: "/claimable-balances/:id/evaluate/:accountId",
+          description:
+            "Evaluate claimability of a balance for a specific account",
+        },
+
+        {
+          method: "GET",
+          path: "/asset/:code/:issuer",
+          description: "Asset metadata and statistics",
+        },
+        {
+          method: "GET",
+          path: "/asset/:code/:issuer/holders",
+          description: "Paginated accounts holding an asset",
+        },
+        {
+          method: "GET",
+          path: "/asset/:code/:issuer/verify",
+          description:
+            "Verify asset issuer via account flags, home_domain, and stellar.toml",
+        },
+        {
+          method: "GET",
+          path: "/asset/search?code=:code",
+          description: "Search assets by code across all issuers",
+        },
+
+        {
+          method: "GET",
+          path: "/dex/arbitrage/:code/:issuer",
+          description: "Find profitable circular arbitrage paths for an asset",
+        },
+        {
+          method: "GET",
+          path: "/dex/spread/:sellAsset/:buyAsset",
+          description: "Calculate bid-ask spread for a DEX trading pair",
+        },
+        {
+          method: "GET",
+          path: "/dex/imbalance/:sellAsset/:buyAsset",
+          description: "Detect buy/sell pressure imbalance on a trading pair",
+        },
+        {
+          method: "GET",
+          path: "/account/:id/counterparties",
+          description: "Analyze frequent payment counterparties for an account",
+        },
+        {
+          method: "GET",
+          path: "/network/validators",
+          description: "Normalised network validator / ledger info",
+        },
+        {
+          method: "GET",
+          path: "/network/ledger-timing",
+          description: "Analyze network ledger close time consistency",
+        },
+        {
+          method: "GET",
+          path: "/network/validators",
+          description: "Current validator list grouped by organisation",
+        },
+        {
+          method: "GET",
+          path: "/liquidity-pools/:id/trades",
+          description: "Trade history for a liquidity pool",
+        },
+        {
+          method: "GET",
+          path: "/liquidity-pools/:id/profitability",
+          description: "Estimate annualized fee income for a liquidity pool",
+        },
+
+        {
+          method: "GET",
+          path: "/dex/price/:sellAsset/:buyAsset",
+          description:
+            "Calculate effective exchange rate via best DEX payment path",
+        },
+        {
+          method: "GET",
+          path: "/dex/top-markets",
+          description:
+            "Top DEX trading pairs by volume with spread (optional ?limit=, default 10, max 50)",
+        },
+        {
+          method: "GET",
+          path: "/liquidity-pools/:id/reserve-ratio",
+          description:
+            "Get reserve ratio and drift from equal for a liquidity pool",
+        },
+
+        {
+          method: "GET",
+          path: "/utils/friendbot/:accountId",
+          description: "Fund a testnet account via Friendbot (testnet only)",
+        },
+        {
+          method: "GET",
+          path: "/utils/convert?xlm=:xlm",
+          description: "Convert between XLM and stroops",
+        },
+        {
+          method: "GET",
+          path: "/utils/validate-account?id=:id",
+          description: "Validate a Stellar public key format (no Horizon call)",
+        },
+        {
+          method: "GET",
+          path: "/utils/validate-hash?hash=:hash",
+          description:
+            "Validate a Stellar transaction hash format (no Horizon call)",
+        },
+        {
+          method: "GET",
+          path: "/utils/network-passphrase",
+          description:
+            "Get the Stellar network passphrase for the configured network",
+        },
+        {
+          method: "WS",
+          path: "/stream/ledgers",
+          description: "Real-time stream of live Stellar ledger updates",
+        },
+        {
+          method: "GET",
+          path: "/cache/stats",
+          description: "Cache hit rate and performance statistics",
+        },
       ],
       docs: "https://github.com/stellarkit-lab-devtools/stellarkit-api#readme",
     },
@@ -281,7 +623,12 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 // ── Start ────────────────────────────────────────────────────────────────────
-function startServer({ appInstance = app, port = PORT, logger = console, setupWebSocketHook = setupWebSocket } = {}) {
+function startServer({
+  appInstance = app,
+  port = PORT,
+  logger = console,
+  setupWebSocketHook = setupWebSocket,
+} = {}) {
   const httpServer = appInstance.listen(port, () => {
     logger.log(`\n🚀 StellarKit API running on port ${port}`);
     logger.log(`🌐 Network : ${process.env.STELLAR_NETWORK || "testnet"}`);

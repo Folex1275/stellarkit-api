@@ -1,5 +1,10 @@
 require("dotenv").config();
-const { Horizon } = require("@stellar/stellar-sdk");
+const { Horizon, rpc } = require("@stellar/stellar-sdk");
+const {
+  makeAccountNotFoundError,
+  makeHorizonTimeoutError,
+  isHorizonTimeoutError,
+} = require("../utils/errors");
 
 const NETWORK = process.env.STELLAR_NETWORK || "testnet";
 
@@ -12,6 +17,15 @@ const horizonUrl =
   process.env.HORIZON_URL || HORIZON_URLS[NETWORK] || HORIZON_URLS.testnet;
 
 const server = new Horizon.Server(horizonUrl);
+
+// Soroban RPC has no free SDF-hosted mainnet endpoint, so there is no mainnet
+// default — SOROBAN_RPC_URL must be set to use the /soroban/* routes on mainnet.
+const SOROBAN_RPC_URLS = {
+  testnet: "https://soroban-testnet.stellar.org",
+};
+
+const sorobanRpcUrl = process.env.SOROBAN_RPC_URL || SOROBAN_RPC_URLS[NETWORK];
+const sorobanServer = sorobanRpcUrl ? new rpc.Server(sorobanRpcUrl) : null;
 
 /**
  * Fetches the account's first funding transaction from Horizon.
@@ -43,11 +57,9 @@ async function fetchAccountCreation(publicKey) {
       timestamp: firstTx.created_at,
     };
   } catch (err) {
-    // Re-throw Horizon 404 as our own 404
+    // Re-throw Horizon 404 as a structured AccountNotFound error
     if (err.response && err.response.status === 404) {
-      const notFoundErr = new Error("Account not found on Stellar network.");
-      notFoundErr.status = 404;
-      throw notFoundErr;
+      throw makeAccountNotFoundError(publicKey, NETWORK);
     }
 
     // If it's already our custom error, re-throw as-is
@@ -55,7 +67,11 @@ async function fetchAccountCreation(publicKey) {
       throw err;
     }
 
-    // For network/connection errors, throw 500
+    if (isHorizonTimeoutError(err)) {
+      throw makeHorizonTimeoutError();
+    }
+
+    // For other network/connection errors, throw 500
     const serverErr = new Error("Unable to reach Stellar Horizon. Please try again.");
     serverErr.status = 500;
     throw serverErr;
@@ -68,4 +84,6 @@ module.exports = {
   NETWORK,
   NETWORKS: HORIZON_URLS,
   fetchAccountCreation,
+  sorobanServer,
+  sorobanRpcUrl,
 };

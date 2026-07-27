@@ -1,6 +1,7 @@
 const request = require("supertest");
 const app = require("../src/index");
 const { server } = require("../src/config/stellar");
+const cacheService = require("../src/services/cache");
 
 // Mock the server.strictReceivePaths method
 jest.mock("../src/config/stellar", () => {
@@ -16,6 +17,9 @@ jest.mock("../src/config/stellar", () => {
 describe("DEX Arbitrage API", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Flush cache so each test starts from a MISS — prevents cross-test
+    // pollution now that the arbitrage endpoint caches its response.
+    cacheService.flush();
   });
 
   describe("GET /dex/arbitrage/:assetCode/:assetIssuer", () => {
@@ -73,7 +77,7 @@ describe("DEX Arbitrage API", () => {
 
       expect(res.statusCode).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.error.type).toBe("ValidationError");
+      expect(res.body.error.type).toBe("InvalidAsset");
     });
 
     it("returns 400 for an invalid issuer", async () => {
@@ -81,7 +85,7 @@ describe("DEX Arbitrage API", () => {
 
       expect(res.statusCode).toBe(400);
       expect(res.body.success).toBe(false);
-      expect(res.body.error.type).toBe("ValidationError");
+      expect(res.body.error.type).toBe("InvalidAsset");
     });
   });
 });
