@@ -77,6 +77,12 @@ const cacheTTL = {
     30000
   ),
 
+  /** /account/:id/pool-positions — changes only when joining or exiting a liquidity pool */
+  poolPositions: msToSeconds(
+    process.env.CACHE_TTL_POOL_POSITIONS_MS,
+    15000
+  ),
+
   /** /account/:id/transaction-count — changes only on new submissions */
   transactionCount: msToSeconds(
     process.env.CACHE_TTL_TX_COUNT_MS,
