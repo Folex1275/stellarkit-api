@@ -379,6 +379,15 @@ Errors are similarly wrapped with:
 
 This consistent contract helps client applications avoid ad hoc parsing logic.
 
+Recent updates in this work session
+----------------------------------
+
+- Added optional `?minBalance` and `?maxBalance` query parameters to `GET /asset/:code/:issuer/holders` for filtering asset holders by balance range.
+- Implemented short-term caching for `GET /account/:id/pool-positions` with a default 15 second TTL, configurable via `CACHE_TTL_POOL_POSITIONS_MS`.
+- Added `X-Cache` response headers to indicate cache status and support `?fresh=true` to bypass cached pool position data.
+- Cleaned and stabilized route imports in `src/routes/account.js` and added request validation helpers for account and pagination endpoints.
+- Documented the behavior and usage of the updated asset and account endpoints in the README.
+
 ### `src/utils/validators.js`
 
 Input validation is critical when accepting public keys, asset codes, and numeric parameters. This module centralizes validation rules for:

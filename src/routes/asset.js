@@ -50,17 +50,57 @@ function formatAssetHolder(account, assetCode, issuer) {
   };
 }
 
+function isValidNonNegativeDecimal(value) {
+  if (value === undefined || value === null) return false;
+  const normalized = String(value).trim();
+  return /^\d+(?:\.\d+)?$/.test(normalized);
+}
+
+function parseNonNegativeDecimalQueryParam(rawValue, fieldName) {
+  if (rawValue === undefined) return null;
+  const value = String(rawValue).trim();
+
+  if (value === "" || !isValidNonNegativeDecimal(value)) {
+    const err = new Error(
+      `Query parameter '${fieldName}': must be a non-negative decimal number.`,
+    );
+    err.isValidation = true;
+    err.status = 400;
+    err.field = fieldName;
+    err.receivedValue = rawValue !== undefined ? String(rawValue) : rawValue;
+    err.expectedFormat = "non-negative decimal string, e.g. 123.45";
+    throw err;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    const err = new Error(
+      `Query parameter '${fieldName}': must be a non-negative decimal number.`,
+    );
+    err.isValidation = true;
+    err.status = 400;
+    err.field = fieldName;
+    err.receivedValue = rawValue !== undefined ? String(rawValue) : rawValue;
+    err.expectedFormat = "non-negative decimal string, e.g. 123.45";
+    throw err;
+  }
+
+  return parsed;
+}
+
 /**
- * GET /asset/:code/:issuer/holders
- * Returns paginated accounts that hold a trustline for a specific asset.
- *
- * Query params:
- *   - limit   (number, default: 10, max: 200)
- *   - cursor  (string, pagination cursor from previous response)
- *   - order   ("asc" | "desc", default: "desc")
- *
+ * @route GET /asset/:code/:issuer/holders
+ * @desc Returns paginated accounts that hold a trustline for a specific asset.
+ * @param {string} code - Asset code, e.g. USDC
+ * @param {string} issuer - Asset issuer account ID, e.g. GA5ZSEJYB...
+ * @param {number} [limit=10] - Maximum number of holders to return.
+ * @param {string} [cursor] - Horizon paging cursor for pagination.
+ * @param {string} [order=desc] - Sort direction for holders.
+ * @param {string} [minBalance] - Optional minimum holder balance filter.
+ * @param {string} [maxBalance] - Optional maximum holder balance filter.
+ * @returns {Object[]} List of holders and pagination metadata.
  * @example
- * GET /asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/holders
+ * curl "http://localhost:3000/asset/USDC/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN/holders?minBalance=10&maxBalance=100"
  */
 router.get(
   "/:code/:issuer/holders",
@@ -74,9 +114,30 @@ router.get(
       const { limit, order, cursor } = parsePaginationParams(req.query);
 
       const fresh = req.query.fresh === "true";
+      const minBalance = parseNonNegativeDecimalQueryParam(
+        req.query.minBalance,
+        "minBalance",
+      );
+      const maxBalance = parseNonNegativeDecimalQueryParam(
+        req.query.maxBalance,
+        "maxBalance",
+      );
+
+      if (minBalance !== null && maxBalance !== null && minBalance > maxBalance) {
+        const err = new Error(
+          "Query parameter 'minBalance' must not be greater than 'maxBalance'.",
+        );
+        err.isValidation = true;
+        err.status = 400;
+        err.field = "minBalance";
+        err.receivedValue = `${req.query.minBalance}`;
+        throw err;
+      }
+
+      const hasBalanceFilter = minBalance !== null || maxBalance !== null;
       const cacheKey = `asset-holders:${assetCode}:${issuer}:${limit}:${order}:${cursor || ""}`;
 
-      if (!fresh) {
+      if (!fresh && !hasBalanceFilter) {
         const cached = cacheService.get(cacheKey);
         if (cached) {
           res.set("X-Cache", "HIT");
@@ -97,27 +158,31 @@ router.get(
       const holders = records.map((account) =>
         formatAssetHolder(account, assetCode, issuer),
       );
+
+      const filteredHolders = holders.filter((holder) => {
+        const balanceValue = Number(holder.balance);
+        if (minBalance !== null && balanceValue < minBalance) return false;
+        if (maxBalance !== null && balanceValue > maxBalance) return false;
+        return true;
+      });
+
       const lastRecord = records[records.length - 1];
       const nextCursor = lastRecord ? lastRecord.paging_token : null;
 
       const meta = {
-        count: holders.length,
+        count: filteredHolders.length,
         limit,
         order,
         nextCursor,
-        hasMore: holders.length === limit,
+        hasMore: filteredHolders.length === limit,
       };
 
-      cacheService.set(cacheKey, { holders, meta }, getAssetHoldersCacheTtlSeconds());
+      if (!hasBalanceFilter) {
+        cacheService.set(cacheKey, { holders: filteredHolders, meta }, getAssetHoldersCacheTtlSeconds());
+      }
 
       res.set("X-Cache", "MISS");
-      return success(res, holders, { meta });
-      return success(res, {
-        items: holders,
-        total: holders.length,
-        limit,
-        cursor: nextCursor,
-      });
+      return success(res, filteredHolders, { meta });
     } catch (err) {
       next(err);
     }

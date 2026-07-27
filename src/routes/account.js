@@ -7,14 +7,15 @@ const {
   makeClaimableBalanceNotFoundError,
 } = require("../utils/errors");
 const cacheService = require("../services/cache");
+const cacheTTL = require("../config/cacheConfig");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
 
 const { buildAccountAgeResponse } = require("../utils/accountAge");
-const cacheService = require("../services/cache");
-const cacheTTL = require("../config/cacheConfig");
-
+const { validateAccountId, validateLimit } = require("../utils/validators");
+const { parsePaginationParams } = require("../utils/pagination");
+const { validateEffectType } = require("../utils/effectTypes");
 
 const axios = require("axios");
 const { Asset } = require("@stellar/stellar-sdk");
@@ -23,22 +24,8 @@ const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
 const { getAssetMetadataFromToml } = require("../utils/tomlResolver");
 const { formatBalance } = require("../utils/formatBalance");
 
-const cacheTTL = require("../config/cacheConfig");
-
 // Cache TTL for account endpoint responses (in seconds)
 const CACHE_TTL_ACCOUNT = parseInt(process.env.CACHE_TTL_ACCOUNT_MS, 10) / 1000 || 10;
-
-function validateLimit(limit, max = 200) {
-  const n = Number(limit);
-  if (!Number.isInteger(n) || n <= 0 || n > max) {
-    const err = new Error(`limit must be between 1 and ${max}`);
-    err.status = 400;
-    err.field = "limit";
-    err.receivedValue = String(limit);
-    throw err;
-  }
-  return n;
-}
 
 function normalizeSignerType(type) {
   const normalized = String(type || "").toLowerCase();
@@ -1917,6 +1904,17 @@ router.get("/:id/pool-positions", async (req, res, next) => {
     const { id } = req.params;
     validateAccountId(id);
 
+    const fresh = req.query.fresh === "true";
+    const cacheKey = `pool-positions:${id}`;
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
     const account = await server.loadAccount(id);
 
     const poolShareTrustlines = (account.balances || []).filter(
@@ -1924,12 +1922,15 @@ router.get("/:id/pool-positions", async (req, res, next) => {
     );
 
     if (poolShareTrustlines.length === 0) {
-      return success(res, {
+      const data = {
         items: [],
         total: 0,
         limit: null,
         cursor: null,
-      });
+      };
+      cacheService.set(cacheKey, data, cacheTTL.poolPositions);
+      res.set("X-Cache", "MISS");
+      return success(res, data);
     }
 
     const poolDetailsPromises = poolShareTrustlines.map((trustline) =>
@@ -1987,12 +1988,16 @@ router.get("/:id/pool-positions", async (req, res, next) => {
       });
     }
 
-    return success(res, {
+    const data = {
       items: positions,
       total: positions.length,
       limit: null,
       cursor: null,
-    });
+    };
+
+    cacheService.set(cacheKey, data, cacheTTL.poolPositions);
+    res.set("X-Cache", "MISS");
+    return success(res, data);
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
