@@ -7,7 +7,7 @@ const {
   makeClaimableBalanceNotFoundError,
 } = require("../utils/errors");
 const cacheService = require("../services/cache");
-const cacheTTL = require("../config/cacheConfig");
+const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { accountSummaryRateLimiter } = require("../middleware/rateLimiter");
 const registerParamValidation = require("../middleware/validateRouteParams");
 registerParamValidation(router);
@@ -20,9 +20,9 @@ const { validateEffectType } = require("../utils/effectTypes");
 const axios = require("axios");
 const { Asset } = require("@stellar/stellar-sdk");
 const { normalizeAsset, normalizeAssetFromString } = require("../utils/asset");
-
 const { getAssetMetadataFromToml } = require("../utils/tomlResolver");
 const { formatBalance } = require("../utils/formatBalance");
+const { validateEffectType } = require("../utils/effectTypes");
 
 // Cache TTL for account endpoint responses (in seconds)
 const CACHE_TTL_ACCOUNT = parseInt(process.env.CACHE_TTL_ACCOUNT_MS, 10) / 1000 || 10;
@@ -123,6 +123,49 @@ function formatAccountBalances(account) {
   };
 }
 
+function toSevenDecimalString(value) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed)) return "0.0000000";
+  return parsed.toFixed(7);
+}
+
+function normalizeAssetShape(asset) {
+  if (!asset) return { code: null, issuer: null, type: "credit_alphanum4" };
+
+  if (asset === "native" || asset.asset_type === "native" || asset.type === "native") {
+    return { code: "XLM", issuer: null, type: "native" };
+  }
+
+  if (typeof asset === "string") {
+    const [code, issuer] = asset.split(":");
+    if (code && issuer) {
+      return {
+        code,
+        issuer,
+        type: code.length > 4 ? "credit_alphanum12" : "credit_alphanum4",
+      };
+    }
+    return { code: asset, issuer: null, type: "credit_alphanum4" };
+  }
+
+  const code = asset.code || asset.asset_code || asset.assetCode || null;
+  const issuer = asset.issuer || asset.asset_issuer || asset.assetIssuer || null;
+  const type = asset.type || asset.asset_type || asset.assetType || (code && code.length > 4 ? "credit_alphanum12" : "credit_alphanum4");
+
+  return { code, issuer, type };
+}
+
+function normalizeClaimableBalance(balanceRecord) {
+  return {
+    balanceId: balanceRecord.id || balanceRecord.balance_id || null,
+    asset: normalizeAssetShape(balanceRecord.asset),
+    amount: toSevenDecimalString(balanceRecord.amount),
+    sponsor: balanceRecord.sponsor || null,
+    createdAt: balanceRecord.created_at || null,
+    claimants: Array.isArray(balanceRecord.claimants) ? balanceRecord.claimants : [],
+  };
+}
+
 async function resolveTrustlineToml(balance, issuerCache, tomlCache) {
   const assetIssuer = balance.asset_issuer;
   const assetCode = balance.asset_code;
@@ -220,15 +263,7 @@ router.get("/:id/trustlines", async (req, res, next) => {
       total: trustlines.length,
       limit: null,
       cursor: null,
-    };
-
-    // Only cache unfiltered results (assetCode filter produces a subset)
-    if (!assetCode) {
-      cacheService.set(cacheKey, data, cacheTTL.trustlines);
-    }
-
-    res.set("X-Cache", "MISS");
-    return success(res, data);
+    });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -284,19 +319,50 @@ router.get("/:id/native-balance", async (req, res, next) => {
 
 /**
  * GET /account/:id/sequence
+ *
+ * Returns the current sequence number for an account.
+ *
+ * Sequence numbers only change when a transaction submitted by the account is
+ * applied to the ledger, making short-term caching effective. Responses are
+ * cached per account ID.
+ *
+ * Query params:
+ *   - fresh (boolean, default: false) — bypasses the cache when set to "true"
+ *
+ * Response headers:
+ *   - X-Cache: HIT  — served from cache
+ *   - X-Cache: MISS — fetched live from Horizon and cached
+ *
+ * Cache TTL is configurable via the CACHE_TTL_SEQUENCE_MS environment variable
+ * (default: 20 000 ms / 20 seconds).
  */
 router.get("/:id/sequence", async (req, res, next) => {
   try {
     const { id } = req.params;
     validateAccountId(id);
 
+    const fresh = req.query.fresh === "true";
+    const cacheKey = `sequence:${id}`;
+
+    if (!fresh) {
+      const cached = cacheService.get(cacheKey);
+      if (cached !== undefined) {
+        res.set("X-Cache", "HIT");
+        return success(res, cached);
+      }
+    }
+
     const account = await server.loadAccount(id);
 
-    return success(res, {
+    const data = {
       accountId: account.id,
       sequence: account.sequence,
       lastModifiedLedger: account.last_modified_ledger,
-    });
+    };
+
+    cacheService.set(cacheKey, data, cacheTTL.sequence);
+    res.set("X-Cache", "MISS");
+    return success(res, data);
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -312,6 +378,65 @@ router.get("/:id/signing-keys", async (req, res, next) => {
 
     const account = await server.loadAccount(id);
     return success(res, normalizeSigningKeysResponse(account));
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
+  }
+});
+
+/**
+ * GET /account/:id/multisig-info
+ *
+ * Returns a human-readable summary of an account's multisig configuration,
+ * including whether the account is multisig-enabled, all three threshold
+ * levels, the master-key weight, and each signer with its key, weight, and type.
+ *
+ * An account is considered "multisig" when it has more than one signer OR
+ * when any threshold is greater than 1 (i.e. no single signer can unilaterally
+ * authorise every operation class).
+ *
+ * @example
+ *   GET /account/GABC.../multisig-info
+ */
+router.get("/:id/multisig-info", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const account = await server.loadAccount(id);
+
+    const signers = (account.signers || []).map((s) => ({
+      key: s.key,
+      weight: Number(s.weight) || 0,
+      type: normalizeSignerType(s.type),
+    }));
+
+    const thresholds = {
+      low: account.thresholds?.low_threshold ?? 0,
+      med: account.thresholds?.med_threshold ?? 0,
+      high: account.thresholds?.high_threshold ?? 0,
+    };
+
+    // Master key is the signer whose key matches the account ID itself.
+    const masterSigner = signers.find((s) => s.key === account.id);
+    const masterWeight = masterSigner ? masterSigner.weight : 0;
+
+    // The account is "multisig" when it requires more than one party to sign,
+    // which is true if there is more than one registered signer OR any
+    // threshold exceeds the weight of the master key alone.
+    const isMultisig =
+      signers.length > 1 ||
+      thresholds.low > masterWeight ||
+      thresholds.med > masterWeight ||
+      thresholds.high > masterWeight;
+
+    return success(res, {
+      accountId: account.id,
+      isMultisig,
+      masterWeight,
+      thresholds,
+      signers,
+      signerCount: signers.length,
+    });
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
@@ -428,6 +553,7 @@ router.get("/:id/payments", async (req, res, next) => {
     let query = server.payments().forAccount(id).limit(limit).order(order);
     if (cursor) query = query.cursor(cursor);
 
+    await query.call();
     // Use operations endpoint to get payment + create_account ops
     const opQuery = server.operations().forAccount(id).limit(limit).order(order);
     const opResponse = await (cursor ? opQuery.cursor(cursor) : opQuery).call();
@@ -597,11 +723,30 @@ router.get("/:id/trades", async (req, res, next) => {
 
 /**
  * GET /account/:id/offers
+ *
+ * Returns open DEX offers for an account.
+ *
+ * Query params:
+ *   - offerId       (string)  — fetch a single offer by its numeric ID
+ *   - expandAssets  (boolean) — when "true", embeds full { code, issuer, type }
+ *                               objects for both selling and buying assets.
+ *                               When omitted (default), returns simplified
+ *                               asset strings for backward compatibility.
+ *   - limit, order, cursor   — standard pagination
+ *
+ * @example
+ *   GET /account/:id/offers                        → simplified asset strings
+ *   GET /account/:id/offers?expandAssets=true      → full asset objects
  */
 router.get("/:id/offers", async (req, res, next) => {
   try {
     const { id } = req.params;
     const { offerId } = req.query;
+
+    // expandAssets=true embeds full { code, issuer, type } objects on each offer.
+    // Any value other than the string "true" keeps the default simplified form.
+    const expandAssets = req.query.expandAssets === "true";
+
     validateAccountId(id);
 
     if (offerId) {
@@ -629,9 +774,6 @@ router.get("/:id/offers", async (req, res, next) => {
 
     const offerResponse = await query.call();
     const offers = (offerResponse.records || []).map((offer) => {
-      const buildAsset = (assetType, assetCode, assetIssuer) =>
-        normalizeAsset(assetCode, assetIssuer, assetType);
-
       // Derive a single decimal price string from price_r (n/d fraction) when
       // available, falling back to the pre-computed price string from Horizon.
       // Always format to 7 decimal places for consistency with other amounts.
@@ -644,23 +786,45 @@ router.get("/:id/offers", async (req, res, next) => {
         priceDecimal = parseFloat(offer.price || "0").toFixed(7);
       }
 
+      // Full normalized asset object { code, issuer, type }
+      const sellingAsset = normalizeAsset(
+        offer.selling_asset_code,
+        offer.selling_asset_issuer,
+        offer.selling_asset_type,
+      );
+      const buyingAsset = normalizeAsset(
+        offer.buying_asset_code,
+        offer.buying_asset_issuer,
+        offer.buying_asset_type,
+      );
+
+      if (expandAssets) {
+        // ?expandAssets=true — embed full asset objects on both sides
+        return {
+          id: offer.id,
+          seller: offer.seller,
+          selling: {
+            asset: sellingAsset,
+            amount: parseFloat(offer.amount || "0").toFixed(7),
+          },
+          buying: {
+            asset: buyingAsset,
+          },
+          price: priceDecimal,
+          lastModifiedLedger: offer.last_modified_ledger,
+        };
+      }
+
+      // Default (backward-compatible) — asset fields spread directly onto selling/buying
       return {
         id: offer.id,
         seller: offer.seller,
         selling: {
-          ...buildAsset(
-            offer.selling_asset_type,
-            offer.selling_asset_code,
-            offer.selling_asset_issuer,
-          ),
+          ...sellingAsset,
           // Format to 7 decimal places (Stellar precision standard)
           amount: parseFloat(offer.amount || "0").toFixed(7),
         },
-        buying: buildAsset(
-          offer.buying_asset_type,
-          offer.buying_asset_code,
-          offer.buying_asset_issuer,
-        ),
+        buying: buyingAsset,
         // price is a 7-decimal string derived from the price_r fraction
         price: priceDecimal,
         // camelCase rename of last_modified_ledger
@@ -1407,10 +1571,10 @@ router.get("/:id/sponsorship", async (req, res, next) => {
       accountsSponsoring,
       count: sponsoredEntries.length,
     });
+  } catch (err) {
+    handleAccountNotFound(err, next, req.params.id);
   }
-
-  return entries;
-}
+});
 
 /**
  * GET /account/:id/sponsorships
@@ -1897,6 +2061,33 @@ router.get("/:id/offer-history", async (req, res, next) => {
 });
 
 /**
+ * GET /account/:id/claimable-balances
+ */
+router.get("/:id/claimable-balances", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const { limit, order, cursor } = parsePaginationParams(req.query, 200);
+
+    let query = server.claimableBalances().forClaimant(id).limit(limit).order(order);
+    if (cursor) query = query.cursor(cursor);
+
+    const balancesResponse = await query.call();
+    const records = balancesResponse.records || [];
+    const balances = records.map(normalizeClaimableBalance);
+    const lastRecord = records[records.length - 1];
+    const nextCursor = lastRecord ? lastRecord.paging_token : null;
+
+    return success(res, balances, {
+      meta: { count: balances.length, limit, order, nextCursor, hasMore: records.length === limit },
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
  * GET /account/:id/pool-positions
  */
 router.get("/:id/pool-positions", async (req, res, next) => {
@@ -1969,9 +2160,9 @@ router.get("/:id/pool-positions", async (req, res, next) => {
 
       positions.push({
         poolId: pool.id,
-        shares: accountShares.toFixed(7),
-        sharePercent: sharePercent.toFixed(4),
-        totalPoolShares: totalShares.toFixed(7),
+        shares: toSevenDecimalString(accountShares),
+        sharePercent: toSevenDecimalString(sharePercent),
+        totalPoolShares: toSevenDecimalString(totalShares),
         reserveA: {
           asset: normalizeAssetFromString(reserveA.asset),
           totalAmount: parseFloat(reserveA.amount).toFixed(7),
@@ -2399,15 +2590,6 @@ router.get("/:id/signing-keys", async (req, res, next) => {
     }
 
     const account = await server.loadAccount(id);
-    const dataEntries = account.data_attr || {};
-
-    const formattedData = Object.entries(dataEntries).map(([key, rawValue]) => {
-      let decodedValue = null;
-      try {
-        decodedValue = Buffer.from(rawValue, "base64").toString("utf8");
-      } catch (e) {
-        // Not decodable as UTF-8
-      }
 
     // Normalise every signer entry from Horizon into a clean shape
     const signers = (account.signers || []).map((s) => ({

@@ -1,8 +1,3 @@
-const cacheService = require("../services/cache");
-
-module.exports = {
-  networkStatusCache: cacheService,
-  feeEstimateCache: cacheService,
 const NodeCache = require("node-cache");
 
 function createCache() {

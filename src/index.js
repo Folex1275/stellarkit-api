@@ -20,6 +20,7 @@ const errorHandler = require("./middleware/errorHandler");
 const requestIdMiddleware = require("./middleware/requestId");
 const apiKeyMiddleware = require("./middleware/apiKeyAuth");
 const sanitize = require("./middleware/sanitize");
+const coerceQueryParams = require("./middleware/coerceQueryParams");
 const etagMiddleware = require("./middleware/etag");
 
 const networkStatusRouter = require("./routes/networkStatus");
@@ -40,6 +41,7 @@ const networkRouter = require("./routes/network");
 const app = express();
 // Disable server identification header for security
 app.disable("x-powered-by");
+const { normalizeAmountFields } = require("./utils/response");
 
 const PORT = process.env.PORT || 3000;
 
@@ -191,6 +193,11 @@ app.use(rateLimiter);
 // ── Input Sanitization ──────────────────────────────────────────────────────
 app.use(sanitize);
 app.use(coerceQueryParams);
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (payload) => originalJson(normalizeAmountFields(payload));
+  next();
+});
 
 // ── Health Check ────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {

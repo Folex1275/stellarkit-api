@@ -227,6 +227,23 @@ export interface AssetMetadata {
   flags?: unknown
 }
 
+/** Claimable balance entry */
+export interface ClaimableBalance {
+  balanceId: string | null
+  asset: {
+    code: string | null
+    issuer: StellarPublicKey | null
+    type: 'native' | 'credit_alphanum4' | 'credit_alphanum12'
+  }
+  amount: StellarAmount
+  sponsor: StellarPublicKey | null
+  createdAt: ISOTimestamp | null
+  claimants: Array<{
+    destination: StellarPublicKey
+    predicate: unknown
+  }>
+}
+
 /** Issuer account information */
 export interface IssuerInfo {
   homeDomain: string | null
@@ -278,6 +295,19 @@ export interface AccountAgeResponse {
 }
 
 /**
+ * Response from GET /account/:id/sequence
+ * Returns the current sequence number and last modified ledger for a Stellar account.
+ */
+export interface AccountSequenceResponse {
+  success: true
+  data: {
+    accountId: StellarPublicKey
+    sequence: string
+    lastModifiedLedger: number
+  }
+}
+
+/**
  * Response from GET /account/:id/balances
  * Returns only native XLM and asset balances for a Stellar account.
  */
@@ -323,6 +353,16 @@ export interface AccountPaymentsResponse {
 export interface TransactionHistoryResponse {
   success: true
   data: TransactionRecord[]
+  meta: PaginationMeta
+}
+
+/**
+ * Response from GET /account/:id/claimable-balances
+ * Returns a paginated list of normalized claimable balances for an account.
+ */
+export interface AccountClaimableBalancesResponse {
+  success: true
+  data: ClaimableBalance[]
   meta: PaginationMeta
 }
 

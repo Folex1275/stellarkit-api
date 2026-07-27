@@ -100,5 +100,74 @@ describe("GET /transaction/:hash/effects", () => {
         expect(server.effects).not.toHaveBeenCalled();
         expect(server.transactions).not.toHaveBeenCalled();
     });
-});
 
+    // ── ?order query parameter ────────────────────────────────────────────────
+
+    it("defaults to desc order when ?order is omitted", async () => {
+        mockTransactionExists();
+        const orderMock = jest.fn().mockReturnThis();
+        server.effects.mockReturnValue({
+            forTransaction: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockReturnThis(),
+            order: orderMock,
+            call: jest.fn().mockResolvedValue({ records: [] }),
+        });
+
+        const res = await request(app)
+            .get(`/transaction/${validHash}/effects`)
+            .set("x-api-key", "test");
+
+        expect(res.statusCode).toBe(200);
+        expect(orderMock).toHaveBeenCalledWith("desc");
+    });
+
+    it("forwards ?order=desc to the Horizon call", async () => {
+        mockTransactionExists();
+        const orderMock = jest.fn().mockReturnThis();
+        server.effects.mockReturnValue({
+            forTransaction: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockReturnThis(),
+            order: orderMock,
+            call: jest.fn().mockResolvedValue({ records: [] }),
+        });
+
+        const res = await request(app)
+            .get(`/transaction/${validHash}/effects?order=desc`)
+            .set("x-api-key", "test");
+
+        expect(res.statusCode).toBe(200);
+        expect(orderMock).toHaveBeenCalledWith("desc");
+    });
+
+    it("forwards ?order=asc to the Horizon call", async () => {
+        mockTransactionExists();
+        const orderMock = jest.fn().mockReturnThis();
+        server.effects.mockReturnValue({
+            forTransaction: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockReturnThis(),
+            order: orderMock,
+            call: jest.fn().mockResolvedValue({ records: [] }),
+        });
+
+        const res = await request(app)
+            .get(`/transaction/${validHash}/effects?order=asc`)
+            .set("x-api-key", "test");
+
+        expect(res.statusCode).toBe(200);
+        expect(orderMock).toHaveBeenCalledWith("asc");
+    });
+
+    it("returns 400 for an invalid ?order value", async () => {
+        mockTransactionExists();
+
+        const res = await request(app)
+            .get(`/transaction/${validHash}/effects?order=random`)
+            .set("x-api-key", "test");
+
+        expect(res.statusCode).toBe(400);
+        expect(res.body.success).toBe(false);
+        expect(res.body.error.type).toBe("ValidationError");
+        // Horizon should never be reached when order is invalid
+        expect(server.effects).not.toHaveBeenCalled();
+    });
+});

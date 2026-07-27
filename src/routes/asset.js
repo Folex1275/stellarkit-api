@@ -6,8 +6,6 @@ const { Asset } = require("@stellar/stellar-sdk");
 const { server, NETWORK } = require("../config/stellar");
 const cacheService = require("../services/cache");
 const { success } = require("../utils/response");
-const { formatBalance } = require("../utils/formatBalance");
-const cacheService = require("../services/cache");
 const { assetHoldersRateLimiter } = require("../middleware/rateLimiter");
 const normalizeAssetCode = require("../middleware/normalizeAssetCode");
 const { validateAccountId, validateAssetCode, validateAsset, validateLimit } = require("../utils/validators");
@@ -18,6 +16,10 @@ const { normalizeAsset } = require("../utils/asset");
 router.use(normalizeAssetCode);
 
 const DEFAULT_ASSET_HOLDERS_CACHE_TTL_MS = 30000;
+
+function isFreshRequest(query) {
+  return query.fresh === true || query.fresh === "true";
+}
 
 function getAssetHoldersCacheTtlSeconds() {
   const parsed = Number.parseInt(process.env.CACHE_TTL_ASSET_HOLDERS_MS, 10);
@@ -36,17 +38,8 @@ function formatAssetHolder(account, assetCode, issuer) {
   const balance = findAssetBalance(account, assetCode, issuer);
 
   return {
-    accountId: account.id || account.account_id,
-    balance: formatBalance(balance ? balance.balance : "0.0000000"),
-    limit: balance ? balance.limit : null,
-    buyingLiabilities: formatBalance(balance ? balance.buying_liabilities : "0.0000000"),
-    sellingLiabilities: formatBalance(balance ? balance.selling_liabilities : "0.0000000"),
-    isAuthorized: balance ? balance.is_authorized : null,
-    isAuthorizedToMaintainLiabilities: balance
-      ? balance.is_authorized_to_maintain_liabilities
-      : null,
-    isClawbackEnabled: balance ? balance.is_clawback_enabled : null,
-    lastModifiedLedger: account.last_modified_ledger,
+    address: account.id || account.account_id,
+    balance: toSevenDecimalString(balance ? balance.balance : "0.0000000"),
   };
 }
 
@@ -206,7 +199,7 @@ router.get("/:code/:issuer", async (req, res, next) => {
 
     const assetCode = code.toUpperCase();
     const cacheKey = `asset:${assetCode}:${issuer}`;
-    const fresh = req.query.fresh === "true";
+    const fresh = isFreshRequest(req.query);
 
     // Check cache first (unless fresh=true)
     if (!fresh) {
@@ -578,7 +571,7 @@ router.get("/:code/:issuer/price", async (req, res, next) => {
 
     const assetCode = code.toUpperCase();
     const cacheKey = `asset-price:${assetCode}:${issuer}`;
-    const fresh = req.query.fresh === "true";
+    const fresh = isFreshRequest(req.query);
 
     if (!fresh) {
       const cached = cacheService.get(cacheKey);

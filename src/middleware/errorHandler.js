@@ -61,6 +61,54 @@ function isMergePath(pathname) {
   return pathname.toLowerCase().includes("merge");
 }
 
+/**
+ * Picks the most specific result code from Horizon's extras.result_codes.
+ * Prefers the transaction code, falling back to the first operation code.
+ */
+function pickMostSpecificResultCode(result_codes) {
+  if (!result_codes) return null;
+  if (typeof result_codes.transaction === "string") {
+    return result_codes.transaction;
+  }
+  if (Array.isArray(result_codes.operations) && result_codes.operations.length > 0) {
+    return result_codes.operations[0];
+  }
+  return null;
+}
+
+/**
+ * Returns true if the Horizon error is a transaction submission failure
+ * (i.e. the network accepted the request but the transaction itself failed).
+ */
+function isTransactionSubmissionFailure(horizonError) {
+  return (
+    horizonError &&
+    horizonError.type &&
+    typeof horizonError.type === "string" &&
+    horizonError.type.includes("transaction_failed")
+  );
+}
+
+/**
+ * Builds a normalised error body for a transaction submission failure.
+ */
+function buildTransactionSubmissionFailedError(horizonError) {
+  const resultCodes = horizonError.extras && horizonError.extras.result_codes
+    ? horizonError.extras.result_codes
+    : {};
+  const resultCode = pickMostSpecificResultCode(resultCodes);
+  const humanMessage = resultCode ? translateHorizonError(resultCode) : null;
+
+  return {
+    type: "TransactionSubmissionFailed",
+    title: horizonError.title || "Transaction Failed",
+    detail: horizonError.detail || "The transaction was rejected by the Stellar network.",
+    message: humanMessage || horizonError.detail || "The transaction was rejected by the Stellar network.",
+    resultCodes,
+    ...(resultCode ? { code: resultCode } : {}),
+  };
+}
+
 function errorHandler(err, req, res, next) {
   // Horizon errors returned from horizon-client / Stellar SDK
   if (err && err.response && err.response.data) {
@@ -82,45 +130,26 @@ function errorHandler(err, req, res, next) {
     const code = resultCode;
     const humanMessage = code ? translateHorizonError(code) : null;
     logError(status, req, message);
-    return res.status(status).json({
-    let resultCode = null;
-    if (extras && extras.result_codes) {
-      if (typeof extras.result_codes.transaction === "string") {
-        resultCode = extras.result_codes.transaction;
-      } else if (
-        Array.isArray(extras.result_codes.operations) &&
-        extras.result_codes.operations.length > 0
-      ) {
-        resultCode = extras.result_codes.operations[0];
-      }
-    }
 
-    const code = resultCode;
-    const humanMessage = translateHorizonError(resultCode);
-    const mappedStatus = mapHorizonErrorToStatus(resultCode);
-    const httpStatus = mappedStatus ?? err.response.status ?? 400;
-   
     const body = {
       success: false,
       error: {
         type: "HorizonError",
         title: horizonError.title || "Horizon Error",
-        detail: horizonError.detail || "An error occurred with the Stellar network.",
+        detail: message,
         status: err.response.status,
         extras,
       },
     };
 
-    if (resultCode) {
-      body.error.code = resultCode;
-      const humanMessage = translateHorizonError(resultCode);
+    if (code) {
+      body.error.code = code;
       if (humanMessage && typeof humanMessage === "string" && humanMessage.length > 0) {
         body.error.message = humanMessage;
       }
     }
 
-    logError(httpStatus, req, horizonError.detail || horizonError.title || "Horizon Error");
-    return res.status(httpStatus).json(body);
+    return res.status(status).json(body);
   }
 
   // StellarKitError instances — already structured
@@ -159,6 +188,19 @@ function errorHandler(err, req, res, next) {
     return res.status(413).json({
       success: false,
       error: ske.toJSON(),
+    });
+  }
+
+  // TransactionNotFound errors (Horizon 404 on transaction lookup)
+  if (err.isTransactionNotFound) {
+    logError(404, req, err.message);
+    return res.status(404).json({
+      success: false,
+      error: {
+        type: "NotFound",
+        message: err.message,
+        suggestion: "Verify the transaction hash is correct and exists on the network.",
+      },
     });
   }
 

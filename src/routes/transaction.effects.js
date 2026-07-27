@@ -6,6 +6,7 @@ registerParamValidation(router);
 const { server, NETWORK } = require("../config/stellar");
 const { success, toISOTimestamp } = require("../utils/response");
 const { makeAccountNotFoundError } = require("../utils/errors");
+const { validateOrder } = require("../utils/validators");
 
 // Local validator (no Horizon call): 64-character hex string.
 function validateTransactionHash(hash) {
@@ -73,10 +74,10 @@ function normalizeEffect(effect) {
 
     if (effect.signer_key !== undefined) base.signerKey = effect.signer_key;
 
-    // Memo-less “details” bag (when Horizon provides it)
+    // Memo-less "details" bag (when Horizon provides it)
     if (effect.details !== undefined) base.details = effect.details;
 
-    // Keep cursor/debug fields but don’t break acceptance criteria
+    // Keep cursor/debug fields but don't break acceptance criteria
     if (effect.paging_token !== undefined) {
         base.pagingToken = effect.paging_token;
     }
@@ -91,11 +92,17 @@ function normalizeEffect(effect) {
 /**
  * GET /transaction/:hash/effects
  * Fetch all ledger effects for a transaction hash.
+ *
+ * Query parameters:
+ *   order  - Sort direction: "asc" or "desc" (default: "desc")
  */
 router.get("/:hash/effects", async (req, res, next) => {
     try {
         const { hash } = req.params;
         validateTransactionHash(hash);
+
+        // Validate ?order query param; defaults to "desc" when omitted.
+        const order = validateOrder(req.query.order);
 
         // Ensure transaction exists for proper 404s (and to avoid effects returning empty for non-existent hashes)
         try {
@@ -120,7 +127,7 @@ router.get("/:hash/effects", async (req, res, next) => {
         // Acceptance criteria only requires effects + total; we set a conservative limit.
         const limit = 200;
 
-        const response = await server.effects().forTransaction(hash).limit(limit).order("desc").call();
+        const response = await server.effects().forTransaction(hash).limit(limit).order(order).call();
         const records = response.records || [];
 
         const effects = records.map(normalizeEffect);
@@ -140,4 +147,3 @@ router.get("/:hash/effects", async (req, res, next) => {
 });
 
 module.exports = router;
-
