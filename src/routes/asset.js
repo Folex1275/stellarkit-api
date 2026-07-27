@@ -3,13 +3,17 @@ const router = express.Router();
 const { Asset } = require("@stellar/stellar-sdk");
 const { server } = require("../config/stellar");
 const { success } = require("../utils/response");
-const { formatBalance } = require("../utils/formatBalance");
 const { assetHoldersRateLimiter } = require("../middleware/rateLimiter");
 const normalizeAssetCode = require("../middleware/normalizeAssetCode");
 const { validateAccountId, validateAssetCode } = require("../utils/validators");
 const { parsePaginationParams } = require("../utils/pagination");
 router.use(normalizeAssetCode);
 
+function toSevenDecimalString(value) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed)) return "0.0000000";
+  return parsed.toFixed(7);
+}
 
 function findAssetBalance(account, assetCode, issuer) {
   return (account.balances || []).find(
@@ -22,17 +26,8 @@ function formatAssetHolder(account, assetCode, issuer) {
   const balance = findAssetBalance(account, assetCode, issuer);
 
   return {
-    accountId: account.id || account.account_id,
-    balance: formatBalance(balance ? balance.balance : "0.0000000"),
-    limit: balance ? balance.limit : null,
-    buyingLiabilities: formatBalance(balance ? balance.buying_liabilities : "0.0000000"),
-    sellingLiabilities: formatBalance(balance ? balance.selling_liabilities : "0.0000000"),
-    isAuthorized: balance ? balance.is_authorized : null,
-    isAuthorizedToMaintainLiabilities: balance
-      ? balance.is_authorized_to_maintain_liabilities
-      : null,
-    isClawbackEnabled: balance ? balance.is_clawback_enabled : null,
-    lastModifiedLedger: account.last_modified_ledger,
+    address: account.id || account.account_id,
+    balance: toSevenDecimalString(balance ? balance.balance : "0.0000000"),
   };
 }
 
@@ -76,14 +71,11 @@ router.get(
       const lastRecord = records[records.length - 1];
       const nextCursor = lastRecord ? lastRecord.paging_token : null;
 
-      return success(res, holders, {
-        meta: {
-          count: holders.length,
-          limit,
-          order,
-          nextCursor,
-          hasMore: holders.length === limit,
-        },
+      return success(res, {
+        holders,
+        total: holders.length,
+        limit,
+        cursor: nextCursor,
       });
     } catch (err) {
       next(err);

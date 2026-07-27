@@ -70,6 +70,49 @@ function formatAccountBalances(account) {
   };
 }
 
+function toSevenDecimalString(value) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed)) return "0.0000000";
+  return parsed.toFixed(7);
+}
+
+function normalizeAssetShape(asset) {
+  if (!asset) return { code: null, issuer: null, type: "credit_alphanum4" };
+
+  if (asset === "native" || asset.asset_type === "native" || asset.type === "native") {
+    return { code: "XLM", issuer: null, type: "native" };
+  }
+
+  if (typeof asset === "string") {
+    const [code, issuer] = asset.split(":");
+    if (code && issuer) {
+      return {
+        code,
+        issuer,
+        type: code.length > 4 ? "credit_alphanum12" : "credit_alphanum4",
+      };
+    }
+    return { code: asset, issuer: null, type: "credit_alphanum4" };
+  }
+
+  const code = asset.code || asset.asset_code || asset.assetCode || null;
+  const issuer = asset.issuer || asset.asset_issuer || asset.assetIssuer || null;
+  const type = asset.type || asset.asset_type || asset.assetType || (code && code.length > 4 ? "credit_alphanum12" : "credit_alphanum4");
+
+  return { code, issuer, type };
+}
+
+function normalizeClaimableBalance(balanceRecord) {
+  return {
+    balanceId: balanceRecord.id || balanceRecord.balance_id || null,
+    asset: normalizeAssetShape(balanceRecord.asset),
+    amount: toSevenDecimalString(balanceRecord.amount),
+    sponsor: balanceRecord.sponsor || null,
+    createdAt: balanceRecord.created_at || null,
+    claimants: Array.isArray(balanceRecord.claimants) ? balanceRecord.claimants : [],
+  };
+}
+
 async function resolveTrustlineToml(balance, issuerCache, tomlCache) {
   const assetIssuer = balance.asset_issuer;
   const assetCode = balance.asset_code;
@@ -880,6 +923,33 @@ router.get("/:id/offer-history", async (req, res, next) => {
 });
 
 /**
+ * GET /account/:id/claimable-balances
+ */
+router.get("/:id/claimable-balances", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    validateAccountId(id);
+
+    const { limit, order, cursor } = parsePaginationParams(req.query, 200);
+
+    let query = server.claimableBalances().forClaimant(id).limit(limit).order(order);
+    if (cursor) query = query.cursor(cursor);
+
+    const balancesResponse = await query.call();
+    const records = balancesResponse.records || [];
+    const balances = records.map(normalizeClaimableBalance);
+    const lastRecord = records[records.length - 1];
+    const nextCursor = lastRecord ? lastRecord.paging_token : null;
+
+    return success(res, balances, {
+      meta: { count: balances.length, limit, order, nextCursor, hasMore: records.length === limit },
+    });
+  } catch (err) {
+    handleAccountNotFound(err, next);
+  }
+});
+
+/**
  * GET /account/:id/pool-positions
  */
 router.get("/:id/pool-positions", async (req, res, next) => {
@@ -932,18 +1002,18 @@ router.get("/:id/pool-positions", async (req, res, next) => {
 
       positions.push({
         poolId: pool.id,
-        shares: accountShares.toFixed(7),
-        sharePercent: sharePercent.toFixed(4),
-        totalPoolShares: totalShares.toFixed(7),
+        shares: toSevenDecimalString(accountShares),
+        sharePercent: toSevenDecimalString(sharePercent),
+        totalPoolShares: toSevenDecimalString(totalShares),
         reserveA: {
-          asset: reserveA.asset,
-          totalAmount: parseFloat(reserveA.amount).toFixed(7),
-          equivalentAmount: equivalentReserveA.toFixed(7),
+          asset: normalizeAssetShape(reserveA),
+          totalAmount: toSevenDecimalString(reserveA.amount),
+          equivalentAmount: toSevenDecimalString(equivalentReserveA),
         },
         reserveB: {
-          asset: reserveB.asset,
-          totalAmount: parseFloat(reserveB.amount).toFixed(7),
-          equivalentAmount: equivalentReserveB.toFixed(7),
+          asset: normalizeAssetShape(reserveB),
+          totalAmount: toSevenDecimalString(reserveB.amount),
+          equivalentAmount: toSevenDecimalString(equivalentReserveB),
         },
         feeBp: pool.fee_bp || 30,
         totalTrustlines: pool.total_trustlines,

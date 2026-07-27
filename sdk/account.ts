@@ -5,6 +5,7 @@ import type {
   AccountSignersResponse,
   AccountAgeResponse,
   AccountRiskScoreResponse,
+  AccountClaimableBalancesResponse,
 } from "../types/index.d";
 
 /** Typed error thrown by AccountModule on non-2xx API responses. */
@@ -46,8 +47,15 @@ export class AccountModule {
   }
 
   /** @private Fetch a path and return the `data` field, or throw StellarKitError. */
-  private async _get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers });
+  private async _get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+    const searchParams = new URLSearchParams();
+    Object.entries(params ?? {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) searchParams.set(key, String(value));
+    });
+
+    const query = searchParams.toString();
+    const url = `${this.baseUrl}${path}${query ? `?${query}` : ""}`;
+    const res = await fetch(url, { headers: this.headers });
     const body = await res.json();
     if (!res.ok) {
       throw new StellarKitError(
@@ -126,5 +134,26 @@ export class AccountModule {
    */
   async getRiskScore(id: string): Promise<AccountRiskScoreResponse["data"]> {
     return this._get<AccountRiskScoreResponse["data"]>(`/account/${id}/risk-score`);
+  }
+
+  /**
+   * Get claimable balances for an account with pagination support.
+   *
+   * @param id - Stellar account public key.
+   * @param options - Optional pagination parameters.
+   * @returns Resolves to a paginated list of claimable balances.
+   * @throws {StellarKitError} On non-2xx response.
+   * @example
+   * const account = new AccountModule({ baseUrl: "http://localhost:3000" });
+   * const balances = await account.getClaimableBalances("GAAZI4...");
+   */
+  async getClaimableBalances(
+    id: string,
+    options?: { limit?: number; cursor?: string },
+  ): Promise<AccountClaimableBalancesResponse["data"]> {
+    return this._get<AccountClaimableBalancesResponse["data"]>(`/account/${id}/claimable-balances`, {
+      limit: options?.limit,
+      cursor: options?.cursor,
+    });
   }
 }
