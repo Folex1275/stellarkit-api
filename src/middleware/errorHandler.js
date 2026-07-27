@@ -191,6 +191,7 @@ function errorHandler(err, req, res, next) {
     });
   }
 
+// AccountNotFound errors (Horizon 404 on account lookup)
   // TransactionNotFound errors (Horizon 404 on transaction lookup)
   if (err.isTransactionNotFound) {
     logError(404, req, err.message);

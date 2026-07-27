@@ -429,6 +429,63 @@ describe("ErrorHandler Middleware", () => {
     });
   });
 
+  describe("InsufficientXLMReserve Errors", () => {
+    it("should handle custom insufficient XLM reserve errors with a 422 status code", () => {
+      const err = {
+        isInsufficientXLMReserve: true,
+        message: "Account GABCDEF has insufficient XLM reserve on the Stellar testnet network. Available: 1.5 XLM, Required: 2.5 XLM, Shortfall: 1.0000000 XLM.",
+        accountId: "GABCDEF",
+        availableBalance: 1.5,
+        requiredReserve: 2.5,
+        shortfall: 1.0,
+        suggestion: "Add more XLM to the account or remove unused subentries (e.g., trustlines, offers, data entries) to free up reserve.",
+      };
+
+      errorHandler(err, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: {
+          type: "InsufficientXLMReserve",
+          message: err.message,
+          accountId: "GABCDEF",
+          availableBalance: 1.5,
+          requiredReserve: 2.5,
+          shortfall: 1.0,
+          suggestion: "Add more XLM to the account or remove unused subentries (e.g., trustlines, offers, data entries) to free up reserve.",
+        },
+      });
+    });
+
+    it("should handle insufficient reserve error with zero available balance", () => {
+      const err = {
+        isInsufficientXLMReserve: true,
+        message: "Account GXYZ has insufficient XLM reserve on the Stellar mainnet network. Available: 0 XLM, Required: 1 XLM, Shortfall: 1.0000000 XLM.",
+        accountId: "GXYZ",
+        availableBalance: 0,
+        requiredReserve: 1,
+        shortfall: 1,
+      };
+
+      errorHandler(err, req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: {
+          type: "InsufficientXLMReserve",
+          message: err.message,
+          accountId: "GXYZ",
+          availableBalance: 0,
+          requiredReserve: 1,
+          shortfall: 1,
+          suggestion: "Add more XLM to the account or remove unused subentries (e.g., trustlines, offers, data entries) to free up reserve.",
+        },
+      });
+    });
+  });
+
   describe("Generic Errors", () => {
     it("should handle generic ServerError with a 500 status code", () => {
       const err = new Error("Database connection failed");
