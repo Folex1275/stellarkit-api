@@ -117,6 +117,21 @@ function errorHandler(err, req, res, next) {
 
     const resultCode = pickMostSpecificResultCode(horizonError?.extras?.result_codes);
 
+    // Handle op_low_reserve as a specific InsufficientReserve error
+    if (resultCode === "op_low_reserve") {
+      const status = mapHorizonErrorToStatus(resultCode) ?? 422;
+      const body = {
+        success: false,
+        error: {
+          type: "InsufficientReserve",
+          message: "Account does not have enough XLM to cover the minimum reserve requirement.",
+          suggestion: "Fund the account with additional XLM. Each account requires a base reserve of 1 XLM plus 0.5 XLM per subentry.",
+        },
+      };
+      logError(status, req, body.error.message);
+      return res.status(status).json(body);
+    }
+
     const mappedStatus = mapHorizonErrorToStatus(resultCode);
     const status = mappedStatus ?? err.response.status ?? 400;
 

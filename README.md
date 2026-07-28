@@ -45,6 +45,7 @@ This project is ideal for:
 - [SDK README](sdk/README.md) — JavaScript client usage and method reference
 - [Getting Started Guide](docs/getting-started.md) - Set up the project and make your first API calls
 - [Error Reference](docs/error-reference.md) - All error types, status codes, and suggested fixes
+- [Error Codes](docs/error-codes.md) - HTTP status code reference with descriptions, scenarios, and sample responses
 - [Rate Limiting](docs/rate-limiting.md) - Default limits, configuration, response headers, and retry strategies
 - [Frequently Asked Questions (FAQ)](FAQ.md) - Common setup and contribution questions
 
