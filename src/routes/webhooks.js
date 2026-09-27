@@ -390,3 +390,4 @@ router.post("/:webhookId/resume", webhookSignatureAuth, (req, res, next) => {
 });
 
 module.exports = router;
+module.exports = router;
