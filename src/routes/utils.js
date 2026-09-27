@@ -169,6 +169,7 @@ router.get("/memo", (req, res, next) => {
  * @example
  * POST /utils/validate-memo
  * { "type": "text", "value": "invoice-123" }
+ * Validate a memo value before it is attached to a transaction.
  */
 router.post("/validate-memo", (req, res, next) => {
   try {
@@ -177,6 +178,9 @@ router.post("/validate-memo", (req, res, next) => {
     return success(res, result);
   } catch (err) {
     next(err);
+    return success(res, validateMemo(type, value));
+  } catch (err) {
+    return next(err);
   }
 });
 
