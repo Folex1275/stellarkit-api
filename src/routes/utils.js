@@ -155,11 +155,29 @@ router.get("/memo", (req, res, next) => {
 
 /**
  * POST /utils/validate-memo
+ * Validate a memo value for its declared Stellar memo type without touching
+ * Horizon. Mirrors GET /utils/validate-account and GET /utils/validate-hash,
+ * but takes the declared type and raw value in the JSON body.
+ *
+ * @param {string} type - one of: none, text, id, hash, return
+ * @param {string} [value] - the memo value to validate
+ *
+ * @returns {{ valid: boolean, type: string, value: string|null,
+ *   byteLength: number|null, error: string|null }}
+ * @throws {Error} 400 when `type` is missing
+ *
+ * @example
+ * POST /utils/validate-memo
+ * { "type": "text", "value": "invoice-123" }
  * Validate a memo value before it is attached to a transaction.
  */
 router.post("/validate-memo", (req, res, next) => {
   try {
     const { type, value } = req.body || {};
+    const result = validateMemo(type, value);
+    return success(res, result);
+  } catch (err) {
+    next(err);
     return success(res, validateMemo(type, value));
   } catch (err) {
     return next(err);
