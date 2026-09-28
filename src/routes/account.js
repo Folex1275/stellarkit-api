@@ -5022,6 +5022,22 @@ router.get("/:id/watchlist-status", async (req, res, next) => {
  * returns the top funding sources sorted by amount descending.
  *
  * Returns 404 when the account does not exist.
+ * Returns the initial funding sources for an account, sorted by amount descending.
+ * Identifies where an account's initial XLM came from.
+ *
+ * Response shape:
+ *   {
+ *     success: true,
+ *     data: {
+ *       accountId: string,
+ *       sources: [{ from: string, amount: string, timestamp: string, transactionHash: string }],
+ *       firstFundedAt: string,
+ *       totalSources: number
+ *     }
+ *   }
+ *
+ * @example
+ * GET /account/GABC.../funding-history
  */
 router.get("/:id/funding-history", async (req, res, next) => {
   try {
@@ -5104,6 +5120,61 @@ router.get("/:id/funding-history", async (req, res, next) => {
       firstFundedAt,
       totalFundingAmount,
     });
+    const account = await withHorizonTiming(req, () => server.loadAccount(id));
+
+    // Get payments into this account, ordered by oldest first
+    const paymentsResponse = await withHorizonTiming(req, () =>
+      server
+        .payments()
+        .forAccount(id)
+        .order("asc")
+        .limit(200)
+        .call()
+    );
+
+    const records = paymentsResponse.records || [];
+
+    // Find create_account and early payment operations
+    const fundingSources = [];
+    let firstFundedAt = null;
+
+    for (const payment of records) {
+      // Only collect initial funding sources (first 10 unique sources)
+      if (fundingSources.length >= 10) break;
+
+      if (payment.type === "create_account" && payment.account === id) {
+        fundingSources.push({
+          from: payment.funder,
+          amount: payment.starting_balance,
+          timestamp: toISOTimestamp(payment.created_at),
+          transactionHash: payment.transaction_hash,
+        });
+        if (!firstFundedAt) firstFundedAt = toISOTimestamp(payment.created_at);
+      } else if (payment.type === "payment" && payment.to === id && isNativeAsset({ type: payment.asset_type })) {
+        const existingSource = fundingSources.find(s => s.from === payment.from);
+        if (!existingSource) {
+          fundingSources.push({
+            from: payment.from,
+            amount: payment.amount,
+            timestamp: toISOTimestamp(payment.created_at),
+            transactionHash: payment.transaction_hash,
+          });
+          if (!firstFundedAt) firstFundedAt = toISOTimestamp(payment.created_at);
+        }
+      }
+    }
+
+    // Sort by amount descending
+    fundingSources.sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
+
+    const data = {
+      accountId: id,
+      sources: fundingSources,
+      firstFundedAt: firstFundedAt || null,
+      totalSources: fundingSources.length,
+    };
+
+    return success(res, data);
   } catch (err) {
     handleAccountNotFound(err, next, req.params.id);
   }
