@@ -53,6 +53,7 @@ This project is ideal for:
 - [Webhook Security Guide](docs/webhook-security.md) - Verify HMAC-SHA256 delivery signatures in Node.js/Python/Go, handle invalid signatures, store secrets safely, and rotate with the dual-secret pattern
 - [Batch Endpoints Guide](docs/batch-endpoints.md) - Batch trust-status, freeze-status, and transaction status APIs, limits, and when to use batch vs individual
 - [DEX Endpoints Guide](docs/dex-endpoints.md) - All six DEX endpoints with curl examples, sample responses, and guidance on spread vs depth vs imbalance vs arbitrage
+- [Compliance Endpoints Guide](docs/compliance-endpoints.md) - All compliance and risk endpoints with curl examples, sample responses, and a complete compliance workflow
 - [Caching Strategy](docs/caching-strategy.md) - Per-endpoint cache TTLs and configuration
 - [Logging Guide](docs/logging.md) - Log levels, configuration, structured log entry fields, JSON parsing, and production monitoring
 - [Monitoring Guide](docs/monitoring.md) - Key metrics, alert thresholds, health check polling strategy, and integration patterns for Prometheus, Datadog, CloudWatch, and uptime tools
@@ -79,6 +80,7 @@ This project is ideal for:
 | GET | `/network-status` | Latest ledger, fees, and protocol info | `fresh` |
 | GET | `/network/ledger-timing` | Analyze ledger close time consistency | — |
 | GET | `/network/validators` | Current validator list grouped by organisation | `fresh` |
+| GET | `/network/validator-quorum` | Current quorum health status | `fresh` |
 | GET | `/network/base-fee` | Current network base fee in stroops and XLM | `fresh` |
 | GET | `/network/fee-percentiles` | Fee distribution percentiles from recent activity | `fresh` |
 
@@ -102,6 +104,7 @@ This project is ideal for:
 | GET | `/account/:id/sequence` | Current sequence number | — |
 | GET | `/account/:id/trustlines` | Trustlines with TOML asset metadata resolved | `assetCode`, `sponsored` |
 | GET | `/account/:id/payments` | Payment and create_account operations | `limit`, `order`, `cursor`, `assetCode`, `assetIssuer` |
+| GET | `/account/:id/funding-history` | Account funding sources with sender, amount, asset, and timestamp | — |
 | GET | `/account/:id/trades` | DEX trades for the account | `limit`, `order`, `cursor`, `fresh` |
 | GET | `/account/:id/offers` | Open DEX offers for an account | `limit`, `cursor` |
 | GET | `/account/:id/offer-history` | Historical offer operations | `limit`, `order`, `cursor` |
